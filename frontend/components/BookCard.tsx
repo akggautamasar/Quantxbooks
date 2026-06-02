@@ -23,7 +23,7 @@ export default function BookCard({ book, view = 'grid' }: BookCardProps) {
           <div className="w-16 h-22 flex-shrink-0 rounded-lg overflow-hidden bg-dark-700">
             {book.cover_url && !imageError ? (
               <Image
-                src={book.cover_url}
+                src={`/api/books/${book.id}/cover`}
                 alt={book.title}
                 width={64}
                 height={88}
@@ -72,7 +72,7 @@ export default function BookCard({ book, view = 'grid' }: BookCardProps) {
         <div className="relative aspect-[2/3] bg-dark-600">
           {book.cover_url && !imageError ? (
             <Image
-              src={book.cover_url}
+              src={`/api/books/${book.id}/cover`}
               alt={book.title}
               fill
               className="object-cover"

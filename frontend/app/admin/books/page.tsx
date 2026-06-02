@@ -98,7 +98,7 @@ export default function AdminBooksPage() {
             <div key={book.id} className="glass rounded-xl p-4 flex items-center gap-4">
               <div className="w-10 h-14 rounded-lg overflow-hidden bg-dark-700 flex-shrink-0">
                 {book.cover_url ? (
-                  <Image src={book.cover_url} alt={book.title} width={40} height={56} className="w-full h-full object-cover" />
+                  <Image src={`/api/books/${book.id}/cover`} alt={book.title} width={40} height={56} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center">
                     <BookOpen className="w-4 h-4 text-gray-500" />

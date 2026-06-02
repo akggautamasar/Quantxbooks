@@ -14,9 +14,12 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
 
     if ('is_premium' in body) {
       updateData.is_premium = body.is_premium;
-      updateData.premium_expiry = body.is_premium
-        ? new Date(Date.now() + 30 * 86_400_000).toISOString()
-        : undefined;
+      if (body.is_premium) {
+        const days = Number(body.duration_days) || 30;
+        updateData.premium_expiry = new Date(Date.now() + days * 86_400_000).toISOString();
+      } else {
+        updateData.premium_expiry = undefined;
+      }
     }
     if ('role' in body) updateData.role = body.role;
     updateData.updated_at = new Date().toISOString();

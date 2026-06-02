@@ -10,6 +10,17 @@ function checkAdmin(request: NextRequest) {
   return decoded;
 }
 
+export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+  try {
+    if (!checkAdmin(request)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
+    const book = await db.getById<db.Book>('books', params.id);
+    if (!book) return NextResponse.json({ success: false, error: 'Book not found' }, { status: 404 });
+    return NextResponse.json({ success: true, data: book });
+  } catch {
+    return NextResponse.json({ success: false, error: 'Failed to fetch book' }, { status: 500 });
+  }
+}
+
 export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     if (!checkAdmin(request)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
