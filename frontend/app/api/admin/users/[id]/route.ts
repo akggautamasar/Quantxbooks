@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceSupabase } from '@/lib/supabase';
+import * as db from '@/lib/tg-db';
 import { verifyToken, getTokenFromHeader } from '@/lib/auth';
 
 export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
@@ -10,29 +10,21 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     if (!decoded || decoded.role !== 'admin') return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
 
     const body = await request.json();
-    const supabase = getServiceSupabase();
+    const updateData: Partial<db.User> & Record<string, any> = {};
 
-    const updateData: Record<string, any> = {};
     if ('is_premium' in body) {
       updateData.is_premium = body.is_premium;
-      if (body.is_premium) {
-        updateData.premium_expiry = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-      } else {
-        updateData.premium_expiry = null;
-      }
+      updateData.premium_expiry = body.is_premium
+        ? new Date(Date.now() + 30 * 86_400_000).toISOString()
+        : undefined;
     }
     if ('role' in body) updateData.role = body.role;
+    updateData.updated_at = new Date().toISOString();
 
-    const { data: user, error } = await supabase
-      .from('users')
-      .update(updateData)
-      .eq('id', params.id)
-      .select()
-      .single();
-
-    if (error) throw error;
+    const user = await db.update<db.User>('users', params.id, updateData as any);
+    if (!user) return NextResponse.json({ success: false, error: 'User not found' }, { status: 404 });
     return NextResponse.json({ success: true, data: user });
-  } catch (error) {
+  } catch {
     return NextResponse.json({ success: false, error: 'Failed to update user' }, { status: 500 });
   }
 }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceSupabase } from '@/lib/supabase';
+import * as db from '@/lib/tg-db';
 import { verifyToken, getTokenFromHeader } from '@/lib/auth';
 
 export async function GET(
@@ -7,45 +7,28 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    const supabase = getServiceSupabase();
-    const { data: book, error } = await supabase
-      .from('books')
-      .select('*')
-      .eq('id', params.id)
-      .single();
-
-    if (error || !book) {
-      return NextResponse.json(
-        { success: false, error: 'Book not found' },
-        { status: 404 }
-      );
+    const book = await db.getById<db.Book>('books', params.id);
+    if (!book) {
+      return NextResponse.json({ success: false, error: 'Book not found' }, { status: 404 });
     }
 
-    // Increment view count
-    await supabase
-      .from('books')
-      .update({ view_count: book.view_count + 1 })
-      .eq('id', params.id);
+    // Increment view count (non-blocking)
+    db.update<db.Book>('books', book.id, { view_count: book.view_count + 1 } as any).catch(() => {});
 
-    // Check user premium status
+    // Check premium status
     const token = getTokenFromHeader(request.headers.get('authorization'));
     let isPremiumUser = false;
     if (token) {
       const decoded = verifyToken(token);
       if (decoded) {
-        const { data: user } = await supabase
-          .from('users')
-          .select('is_premium, premium_expiry')
-          .eq('id', decoded.userId)
-          .single();
-
+        const user = await db.getById<db.User>('users', decoded.userId);
         isPremiumUser =
           user?.is_premium === true &&
-          (!user.premium_expiry || new Date(user.premium_expiry) > new Date());
+          (!user.premium_expiry || user.premium_expiry > new Date().toISOString());
       }
     }
 
-    // For non-premium users, hide the full PDF/EPUB URL
+    // Strip sensitive URLs for non-premium users
     const bookData = { ...book };
     if (!isPremiumUser && book.is_premium) {
       delete bookData.pdf_url;
@@ -54,11 +37,8 @@ export async function GET(
     }
 
     return NextResponse.json({ success: true, data: bookData, isPremiumUser });
-  } catch (error) {
-    console.error('Book fetch error:', error);
-    return NextResponse.json(
-      { success: false, error: 'Failed to fetch book' },
-      { status: 500 }
-    );
+  } catch (err) {
+    console.error('Book fetch error:', err);
+    return NextResponse.json({ success: false, error: 'Failed to fetch book' }, { status: 500 });
   }
 }

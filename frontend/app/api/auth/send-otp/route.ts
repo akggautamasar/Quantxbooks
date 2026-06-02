@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceSupabase } from '@/lib/supabase';
+import * as db from '@/lib/tg-db';
 import { generateOTP, isValidMobile } from '@/lib/utils';
 import { OTP_EXPIRY_MINUTES } from '@/lib/constants';
 
@@ -8,25 +8,18 @@ export async function POST(request: NextRequest) {
     const { mobile, telegramChatId } = await request.json();
 
     if (!mobile || !isValidMobile(mobile)) {
-      return NextResponse.json(
-        { success: false, error: 'Invalid mobile number' },
-        { status: 400 }
-      );
+      return NextResponse.json({ success: false, error: 'Invalid mobile number' }, { status: 400 });
     }
 
-    const supabase = getServiceSupabase();
-
-    // Check rate limit - max 3 OTPs per 10 minutes
-    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-    const { count } = await supabase
-      .from('otp_records')
-      .select('*', { count: 'exact', head: true })
-      .eq('mobile', mobile)
-      .gte('created_at', tenMinutesAgo);
-
-    if (count && count >= 3) {
+    // Rate limit: max 3 OTPs per 10 minutes
+    const tenMinsAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const recentOtps = await db.findMany<db.OTPRecord>(
+      'otps',
+      (o) => o.mobile === mobile && o.created_at >= tenMinsAgo
+    );
+    if (recentOtps.length >= 3) {
       return NextResponse.json(
-        { success: false, error: 'Too many OTP requests. Please wait 10 minutes.' },
+        { success: false, error: 'Too many OTP requests. Wait 10 minutes.' },
         { status: 429 }
       );
     }
@@ -34,49 +27,38 @@ export async function POST(request: NextRequest) {
     const otp = generateOTP();
     const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000).toISOString();
 
-    // Store OTP
-    await supabase.from('otp_records').insert({
+    await db.insert<db.OTPRecord>('otps', {
       mobile,
       otp,
       expires_at: expiresAt,
-    });
+      verified: false,
+      attempts: 0,
+    } as any);
 
-    // Send OTP via Telegram if chat ID is provided
+    // Send OTP via Telegram
     let otpSent = false;
     if (telegramChatId && process.env.TELEGRAM_BOT_TOKEN) {
-      const message = `🔐 <b>QuantXBooks OTP</b>\n\nYour verification code: <b>${otp}</b>\n\nExpires in ${OTP_EXPIRY_MINUTES} minutes.\nDo not share this with anyone.`;
-
+      const msg = `🔐 <b>QuantXBooks OTP</b>\n\nYour code: <b>${otp}</b>\n\nExpires in ${OTP_EXPIRY_MINUTES} minutes.\nDo not share this with anyone.`;
       const res = await fetch(
         `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: telegramChatId,
-            text: message,
-            parse_mode: 'HTML',
-          }),
+          body: JSON.stringify({ chat_id: telegramChatId, text: msg, parse_mode: 'HTML' }),
         }
       );
       const data = await res.json();
       otpSent = data.ok;
     }
 
-    // In dev mode, return OTP directly
     const isDev = process.env.NODE_ENV === 'development';
-
     return NextResponse.json({
       success: true,
-      message: otpSent
-        ? 'OTP sent via Telegram'
-        : 'OTP generated (Telegram not configured)',
-      ...(isDev && { otp }), // Only in dev
+      message: otpSent ? 'OTP sent via Telegram' : 'OTP generated (configure Telegram to receive it)',
+      ...(isDev && { otp }),
     });
-  } catch (error) {
-    console.error('Send OTP error:', error);
-    return NextResponse.json(
-      { success: false, error: 'Failed to send OTP' },
-      { status: 500 }
-    );
+  } catch (err) {
+    console.error('Send OTP error:', err);
+    return NextResponse.json({ success: false, error: 'Failed to send OTP' }, { status: 500 });
   }
 }

@@ -1,7 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceSupabase } from '@/lib/supabase';
-import { generateOTP } from '@/lib/utils';
-import { OTP_EXPIRY_MINUTES } from '@/lib/constants';
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 

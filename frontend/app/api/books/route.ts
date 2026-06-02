@@ -1,54 +1,50 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceSupabase } from '@/lib/supabase';
+import * as db from '@/lib/tg-db';
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const category = searchParams.get('category');
-    const language = searchParams.get('language');
-    const search = searchParams.get('search');
-    const featured = searchParams.get('featured');
-    const page = parseInt(searchParams.get('page') || '1');
-    const limit = parseInt(searchParams.get('limit') || '12');
+    const category = searchParams.get('category') || '';
+    const language = searchParams.get('language') || '';
+    const search = searchParams.get('search') || '';
+    const featured = searchParams.get('featured') === 'true';
+    const page = Math.max(1, parseInt(searchParams.get('page') || '1'));
+    const limit = Math.min(50, parseInt(searchParams.get('limit') || '12'));
     const sort = searchParams.get('sort') || 'newest';
-    const offset = (page - 1) * limit;
 
-    const supabase = getServiceSupabase();
-    let query = supabase.from('books').select('*', { count: 'exact' });
+    let books = await db.getAll<db.Book>('books');
 
-    if (category) query = query.eq('category', category);
-    if (language) query = query.eq('language', language);
-    if (featured === 'true') query = query.eq('is_featured', true);
+    // Filter
+    if (category) books = books.filter((b) => b.category === category);
+    if (language) books = books.filter((b) => b.language === language);
+    if (featured) books = books.filter((b) => b.is_featured);
     if (search) {
-      query = query.or(
-        `title.ilike.%${search}%,author.ilike.%${search}%,description.ilike.%${search}%`
+      const q = search.toLowerCase();
+      books = books.filter(
+        (b) =>
+          b.title.toLowerCase().includes(q) ||
+          b.author.toLowerCase().includes(q) ||
+          b.description?.toLowerCase().includes(q)
       );
     }
 
-    if (sort === 'newest') query = query.order('created_at', { ascending: false });
-    else if (sort === 'popular') query = query.order('view_count', { ascending: false });
-    else if (sort === 'title') query = query.order('title', { ascending: true });
+    // Sort
+    if (sort === 'newest') books.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    else if (sort === 'popular') books.sort((a, b) => b.view_count - a.view_count);
+    else if (sort === 'title') books.sort((a, b) => a.title.localeCompare(b.title));
 
-    query = query.range(offset, offset + limit - 1);
-
-    const { data: books, count, error } = await query;
-    if (error) throw error;
+    const total = books.length;
+    const totalPages = Math.ceil(total / limit);
+    const offset = (page - 1) * limit;
+    const paginated = books.slice(offset, offset + limit);
 
     return NextResponse.json({
       success: true,
-      data: books,
-      pagination: {
-        total: count || 0,
-        page,
-        limit,
-        totalPages: Math.ceil((count || 0) / limit),
-      },
+      data: paginated,
+      pagination: { total, page, limit, totalPages },
     });
-  } catch (error) {
-    console.error('Books fetch error:', error);
-    return NextResponse.json(
-      { success: false, error: 'Failed to fetch books' },
-      { status: 500 }
-    );
+  } catch (err) {
+    console.error('Books fetch error:', err);
+    return NextResponse.json({ success: false, error: 'Failed to fetch books' }, { status: 500 });
   }
 }

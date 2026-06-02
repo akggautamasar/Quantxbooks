@@ -1,60 +1,59 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceSupabase } from '@/lib/supabase';
+import * as db from '@/lib/tg-db';
 import { SUBSCRIPTION_PLANS } from '@/lib/constants';
-import { notifyNewSubscription } from '@/lib/telegram';
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-
-    // Verify webhook secret
     const webhookSecret = request.headers.get('x-webhook-secret');
     if (webhookSecret !== process.env.COSMOFEED_WEBHOOK_SECRET) {
       return NextResponse.json({ success: false, error: 'Invalid webhook secret' }, { status: 401 });
     }
 
-    const { event, data } = body;
+    const { event, data } = await request.json();
 
     if (event === 'payment.success') {
       const { userId, plan, paymentId, amount } = data;
       const planDetails = SUBSCRIPTION_PLANS.find((p) => p.plan === plan);
       if (!planDetails) return NextResponse.json({ success: false, error: 'Invalid plan' }, { status: 400 });
 
-      const supabase = getServiceSupabase();
-      const expiryDate = new Date(Date.now() + planDetails.duration_days * 24 * 60 * 60 * 1000);
+      // Cancel existing active subs
+      await db.updateMany<db.Subscription>(
+        'subscriptions',
+        (s) => s.user_id === userId && s.status === 'active',
+        { status: 'cancelled' } as any
+      );
 
-      // Cancel existing subscriptions
-      await supabase
-        .from('subscriptions')
-        .update({ status: 'cancelled' })
-        .eq('user_id', userId)
-        .eq('status', 'active');
-
-      // Create new subscription
-      await supabase.from('subscriptions').insert({
+      const expiry = new Date(Date.now() + planDetails.duration_days * 86_400_000);
+      await db.insert<db.Subscription>('subscriptions', {
         user_id: userId,
         plan,
         amount,
-        expiry_date: expiryDate.toISOString(),
+        start_date: new Date().toISOString(),
+        expiry_date: expiry.toISOString(),
         status: 'active',
         payment_id: paymentId,
-        payment_provider: 'cosmofeed',
-      });
+      } as any);
 
-      const { data: user } = await supabase
-        .from('users')
-        .select('name')
-        .eq('id', userId)
-        .single();
+      await db.update<db.User>('users', userId, {
+        is_premium: true,
+        premium_expiry: expiry.toISOString(),
+        updated_at: new Date().toISOString(),
+      } as any);
 
-      if (user) {
-        await notifyNewSubscription(user.name, planDetails.name, amount);
+      const user = await db.getById<db.User>('users', userId);
+      if (user && process.env.TELEGRAM_ADMIN_CHAT_ID && process.env.TELEGRAM_BOT_TOKEN) {
+        const msg = `💰 <b>Payment Received</b>\nUser: ${user.name}\nPlan: ${planDetails.name}\nAmount: ₹${amount}`;
+        await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: process.env.TELEGRAM_ADMIN_CHAT_ID, text: msg, parse_mode: 'HTML' }),
+        });
       }
     }
 
     return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('Cosmofeed webhook error:', error);
-    return NextResponse.json({ success: false, error: 'Webhook processing failed' }, { status: 500 });
+  } catch (err) {
+    console.error('Cosmofeed webhook error:', err);
+    return NextResponse.json({ success: false, error: 'Webhook failed' }, { status: 500 });
   }
 }

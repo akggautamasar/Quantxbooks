@@ -1,57 +1,43 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceSupabase } from '@/lib/supabase';
+import * as db from '@/lib/tg-db';
 import { verifyToken, getTokenFromHeader } from '@/lib/auth';
 
 export async function GET(request: NextRequest) {
   try {
     const token = getTokenFromHeader(request.headers.get('authorization'));
     if (!token) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-
     const decoded = verifyToken(token);
-    if (!decoded || decoded.role !== 'admin') {
-      return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
-    }
+    if (!decoded || decoded.role !== 'admin') return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
 
-    const supabase = getServiceSupabase();
-    const thisMonth = new Date();
-    thisMonth.setDate(1);
-    thisMonth.setHours(0, 0, 0, 0);
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
-    const [
-      { count: totalUsers },
-      { count: premiumUsers },
-      { count: totalBooks },
-      { count: totalSubscriptions },
-      { count: newUsersThisMonth },
-    ] = await Promise.all([
-      supabase.from('users').select('*', { count: 'exact', head: true }),
-      supabase.from('users').select('*', { count: 'exact', head: true }).eq('is_premium', true),
-      supabase.from('books').select('*', { count: 'exact', head: true }),
-      supabase.from('subscriptions').select('*', { count: 'exact', head: true }).eq('status', 'active'),
-      supabase.from('users').select('*', { count: 'exact', head: true }).gte('created_at', thisMonth.toISOString()),
+    const [users, books, subscriptions] = await Promise.all([
+      db.getAll<db.User>('users'),
+      db.getAll<db.Book>('books'),
+      db.getAll<db.Subscription>('subscriptions'),
     ]);
 
-    const { data: revenueData } = await supabase
-      .from('subscriptions')
-      .select('amount')
-      .eq('status', 'active')
-      .gte('created_at', thisMonth.toISOString());
-
-    const revenueThisMonth = revenueData?.reduce((sum, s) => sum + Number(s.amount), 0) || 0;
+    const premiumUsers = users.filter((u) => u.is_premium).length;
+    const activeSubscriptions = subscriptions.filter((s) => s.status === 'active').length;
+    const newUsersThisMonth = users.filter((u) => u.created_at >= monthStart).length;
+    const revenueThisMonth = subscriptions
+      .filter((s) => s.status === 'active' && s.created_at >= monthStart)
+      .reduce((sum, s) => sum + Number(s.amount), 0);
 
     return NextResponse.json({
       success: true,
       data: {
-        total_users: totalUsers || 0,
-        premium_users: premiumUsers || 0,
-        total_books: totalBooks || 0,
-        total_subscriptions: totalSubscriptions || 0,
+        total_users: users.length,
+        premium_users: premiumUsers,
+        total_books: books.length,
+        total_subscriptions: activeSubscriptions,
         revenue_this_month: revenueThisMonth,
-        new_users_this_month: newUsersThisMonth || 0,
+        new_users_this_month: newUsersThisMonth,
       },
     });
-  } catch (error) {
-    console.error('Admin stats error:', error);
+  } catch (err) {
+    console.error('Stats error:', err);
     return NextResponse.json({ success: false, error: 'Failed to fetch stats' }, { status: 500 });
   }
 }

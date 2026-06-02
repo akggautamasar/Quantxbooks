@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceSupabase } from '@/lib/supabase';
+import * as db from '@/lib/tg-db';
 import { verifyToken, getTokenFromHeader } from '@/lib/auth';
 
 export async function GET(request: NextRequest) {
@@ -9,14 +9,10 @@ export async function GET(request: NextRequest) {
     const decoded = verifyToken(token);
     if (!decoded || decoded.role !== 'admin') return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
 
-    const supabase = getServiceSupabase();
-    const { data: users } = await supabase
-      .from('users')
-      .select('id, name, mobile, email, is_premium, premium_expiry, role, created_at')
-      .order('created_at', { ascending: false });
-
+    const users = await db.getAll<db.User>('users');
+    users.sort((a, b) => b.created_at.localeCompare(a.created_at));
     return NextResponse.json({ success: true, data: users });
-  } catch (error) {
+  } catch {
     return NextResponse.json({ success: false, error: 'Failed to fetch users' }, { status: 500 });
   }
 }

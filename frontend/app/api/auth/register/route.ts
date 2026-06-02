@@ -1,60 +1,40 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceSupabase } from '@/lib/supabase';
+import * as db from '@/lib/tg-db';
 import { isValidMobile } from '@/lib/utils';
 
 export async function POST(request: NextRequest) {
   try {
     const { name, mobile, email } = await request.json();
 
-    if (!name || !mobile) {
-      return NextResponse.json(
-        { success: false, error: 'Name and mobile are required' },
-        { status: 400 }
-      );
+    if (!name?.trim() || !mobile) {
+      return NextResponse.json({ success: false, error: 'Name and mobile are required' }, { status: 400 });
     }
-
     if (!isValidMobile(mobile)) {
-      return NextResponse.json(
-        { success: false, error: 'Invalid mobile number' },
-        { status: 400 }
-      );
+      return NextResponse.json({ success: false, error: 'Invalid mobile number (must be 10 digits starting with 6-9)' }, { status: 400 });
     }
 
-    const supabase = getServiceSupabase();
-
-    // Check if user already exists
-    const { data: existingUser } = await supabase
-      .from('users')
-      .select('id, mobile')
-      .eq('mobile', mobile)
-      .single();
-
-    if (existingUser) {
-      return NextResponse.json(
-        { success: false, error: 'Mobile number already registered' },
-        { status: 409 }
-      );
+    // Check duplicate
+    const existing = await db.findOne<db.User>('users', (u) => u.mobile === mobile);
+    if (existing) {
+      return NextResponse.json({ success: false, error: 'Mobile number already registered' }, { status: 409 });
     }
 
-    // Create user
-    const { data: user, error } = await supabase
-      .from('users')
-      .insert({ name, mobile, email: email || null })
-      .select()
-      .single();
-
-    if (error) throw error;
+    const user = await db.insert<db.User>('users', {
+      name: name.trim(),
+      mobile,
+      email: email?.trim() || undefined,
+      is_premium: false,
+      role: 'user',
+      updated_at: new Date().toISOString(),
+    } as any);
 
     return NextResponse.json({
       success: true,
-      message: 'Registration successful. Please verify your mobile.',
+      message: 'Registered successfully. Please verify your mobile.',
       data: { userId: user.id },
     });
-  } catch (error) {
-    console.error('Register error:', error);
-    return NextResponse.json(
-      { success: false, error: 'Registration failed' },
-      { status: 500 }
-    );
+  } catch (err) {
+    console.error('Register error:', err);
+    return NextResponse.json({ success: false, error: 'Registration failed' }, { status: 500 });
   }
 }

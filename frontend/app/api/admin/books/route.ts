@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServiceSupabase } from '@/lib/supabase';
+import * as db from '@/lib/tg-db';
 import { verifyToken, getTokenFromHeader } from '@/lib/auth';
 
-async function checkAdmin(request: NextRequest) {
+function checkAdmin(request: NextRequest) {
   const token = getTokenFromHeader(request.headers.get('authorization'));
   if (!token) return null;
   const decoded = verifyToken(token);
@@ -10,57 +10,46 @@ async function checkAdmin(request: NextRequest) {
   return decoded;
 }
 
-export async function POST(request: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
-    const admin = await checkAdmin(request);
-    if (!admin) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 });
-
-    const body = await request.json();
-    const supabase = getServiceSupabase();
-
-    const { data: book, error } = await supabase
-      .from('books')
-      .insert({
-        title: body.title,
-        author: body.author,
-        description: body.description,
-        cover_url: body.cover_url,
-        pdf_url: body.pdf_url,
-        epub_url: body.epub_url,
-        category: body.category,
-        tags: body.tags || [],
-        language: body.language || 'English',
-        total_pages: body.total_pages,
-        file_size: body.file_size,
-        is_premium: body.is_premium !== false,
-        is_featured: body.is_featured || false,
-        telegram_file_id: body.telegram_file_id,
-        preview_pages: body.preview_pages || [],
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
-    return NextResponse.json({ success: true, data: book }, { status: 201 });
-  } catch (error) {
-    console.error('Admin create book error:', error);
-    return NextResponse.json({ success: false, error: 'Failed to create book' }, { status: 500 });
+    if (!checkAdmin(request)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
+    const books = await db.getAll<db.Book>('books');
+    books.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    return NextResponse.json({ success: true, data: books, total: books.length });
+  } catch {
+    return NextResponse.json({ success: false, error: 'Failed to fetch books' }, { status: 500 });
   }
 }
 
-export async function GET(request: NextRequest) {
+export async function POST(request: NextRequest) {
   try {
-    const admin = await checkAdmin(request);
-    if (!admin) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 });
+    if (!checkAdmin(request)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
 
-    const supabase = getServiceSupabase();
-    const { data: books, count } = await supabase
-      .from('books')
-      .select('*', { count: 'exact' })
-      .order('created_at', { ascending: false });
+    const body = await request.json();
+    const book = await db.insert<db.Book>('books', {
+      title: body.title,
+      author: body.author,
+      description: body.description || '',
+      cover_url: body.cover_url || '',
+      pdf_url: body.pdf_url || '',
+      epub_url: body.epub_url || '',
+      category: body.category,
+      tags: body.tags || [],
+      language: body.language || 'English',
+      total_pages: body.total_pages,
+      file_size: body.file_size,
+      is_premium: body.is_premium !== false,
+      is_featured: body.is_featured || false,
+      download_count: 0,
+      view_count: 0,
+      telegram_file_id: body.telegram_file_id || '',
+      preview_pages: body.preview_pages || [],
+      updated_at: new Date().toISOString(),
+    } as any);
 
-    return NextResponse.json({ success: true, data: books, total: count });
-  } catch (error) {
-    return NextResponse.json({ success: false, error: 'Failed to fetch books' }, { status: 500 });
+    return NextResponse.json({ success: true, data: book }, { status: 201 });
+  } catch (err) {
+    console.error('Admin create book error:', err);
+    return NextResponse.json({ success: false, error: 'Failed to create book' }, { status: 500 });
   }
 }
