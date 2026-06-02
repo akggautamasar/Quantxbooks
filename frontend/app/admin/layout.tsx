@@ -6,7 +6,7 @@ import Link from 'next/link';
 import {
   LayoutDashboard, BookOpen, Users, CreditCard,
   BarChart2, Settings, LogOut, Menu, X, Crown,
-  ChevronRight, Upload
+  ChevronRight, Upload, RefreshCw
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -14,6 +14,7 @@ const NAV_ITEMS = [
   { href: '/admin', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/admin/books', label: 'Books', icon: BookOpen },
   { href: '/admin/books/upload', label: 'Upload Book', icon: Upload },
+  { href: '/admin/sync', label: 'Sync from Telegram', icon: RefreshCw },
   { href: '/admin/users', label: 'Users', icon: Users },
   { href: '/admin/subscriptions', label: 'Subscriptions', icon: CreditCard },
   { href: '/admin/analytics', label: 'Analytics', icon: BarChart2 },
