@@ -35,6 +35,14 @@ export async function POST(request: NextRequest) {
       attempts: 0,
     } as any);
 
+    // Persist telegram_chat_id to user record if provided
+    if (telegramChatId) {
+      const user = await db.findOne<db.User>('users', (u) => u.mobile === mobile);
+      if (user) {
+        db.update<db.User>('users', user.id, { telegram_chat_id: telegramChatId } as any).catch(() => {});
+      }
+    }
+
     // Send OTP via Telegram
     let otpSent = false;
     if (telegramChatId && process.env.TELEGRAM_BOT_TOKEN) {

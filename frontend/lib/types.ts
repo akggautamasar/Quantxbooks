@@ -3,11 +3,13 @@ export interface User {
   name: string;
   mobile: string;
   email?: string;
+  telegram_chat_id?: string;
   is_premium: boolean;
   premium_expiry?: string;
   avatar_url?: string;
   role: 'user' | 'admin';
   created_at: string;
+  updated_at?: string;
 }
 
 export interface Book {

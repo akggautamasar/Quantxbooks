@@ -198,7 +198,7 @@ export default function DashboardPage() {
                         <div className="glass rounded-xl p-4 hover:border-primary-500/50 transition-all flex gap-3">
                           <div className="w-12 h-16 rounded-lg bg-primary-900/50 flex items-center justify-center flex-shrink-0">
                             {item.book?.cover_url ? (
-                              <Image src={item.book.cover_url} alt="" width={48} height={64} className="w-full h-full object-cover rounded-lg" />
+                              <Image src={`/api/books/${item.book_id}/cover`} alt="" width={48} height={64} className="w-full h-full object-cover rounded-lg" />
                             ) : (
                               <BookOpen className="w-5 h-5 text-primary-400" />
                             )}
@@ -237,7 +237,7 @@ export default function DashboardPage() {
                       <div className="glass rounded-xl p-4 hover:border-primary-500/50 transition-all flex items-center gap-4">
                         <div className="w-12 h-16 rounded-lg bg-dark-700 flex-shrink-0">
                           {item.book?.cover_url ? (
-                            <Image src={item.book.cover_url} alt="" width={48} height={64} className="w-full h-full object-cover rounded-lg" />
+                            <Image src={`/api/books/${item.book_id}/cover`} alt="" width={48} height={64} className="w-full h-full object-cover rounded-lg" />
                           ) : (
                             <div className="w-full h-full flex items-center justify-center"><BookOpen className="w-5 h-5 text-gray-500" /></div>
                           )}
@@ -313,7 +313,7 @@ export default function DashboardPage() {
 }
 
 function ProfileTab({ user, onUpdate }: { user: UserType; onUpdate: (u: UserType) => void }) {
-  const [form, setForm] = useState({ name: user.name, email: user.email || '', telegram_chat_id: '' });
+  const [form, setForm] = useState({ name: user.name, email: user.email || '', telegram_chat_id: user.telegram_chat_id || '' });
   const [saving, setSaving] = useState(false);
 
   const handleSave = async (e: React.FormEvent) => {
