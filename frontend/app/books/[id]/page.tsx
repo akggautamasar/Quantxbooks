@@ -75,11 +75,7 @@ export default function BookDetailPage() {
       router.push('/pricing');
       return;
     }
-    if (book?.pdf_url) {
-      window.open(book.pdf_url, '_blank');
-    } else {
-      toast.error('Download not available for this book');
-    }
+    window.open(`/api/books/${book!.id}/download`, '_blank');
   };
 
   if (loading) return <PageLoader />;
@@ -108,7 +104,7 @@ export default function BookDetailPage() {
             <div className="lg:col-span-1">
               <div className="relative rounded-2xl overflow-hidden aspect-[2/3] max-w-xs mx-auto lg:mx-0 shadow-2xl">
                 {book.cover_url ? (
-                  <Image src={book.cover_url} alt={book.title} fill className="object-cover" />
+                  <Image src={`/api/books/${book.id}/cover`} alt={book.title} fill className="object-cover" />
                 ) : (
                   <div className="w-full h-full bg-gradient-to-br from-primary-900 to-dark-700 flex items-center justify-center">
                     <BookOpen className="w-20 h-20 text-primary-400/30" />
@@ -285,9 +281,9 @@ export default function BookDetailPage() {
               </button>
             </div>
             <div className="flex-1 overflow-auto p-4">
-              {book.pdf_url ? (
+              {book.pdf_url || book.epub_url ? (
                 <iframe
-                  src={`${book.pdf_url}#toolbar=0`}
+                  src={`/api/books/${book.id}/read`}
                   className="w-full h-full min-h-screen rounded-lg"
                   title={book.title}
                 />

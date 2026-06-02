@@ -10,8 +10,11 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    // Must be authenticated and premium
-    const token = getTokenFromHeader(request.headers.get('authorization'));
+    // Must be authenticated — fall back to cookie for browser requests
+    const token =
+      getTokenFromHeader(request.headers.get('authorization')) ||
+      request.cookies.get('token')?.value ||
+      null;
     if (!token) {
       return NextResponse.json({ success: false, error: 'Authentication required' }, { status: 401 });
     }
@@ -21,10 +24,12 @@ export async function GET(
       return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 401 });
     }
 
+    const isAdmin = decoded.role === 'admin';
     const user = await db.getById<db.User>('users', decoded.userId);
     const isPremium =
-      user?.is_premium === true &&
-      (!user.premium_expiry || user.premium_expiry > new Date().toISOString());
+      isAdmin ||
+      (user?.is_premium === true &&
+        (!user.premium_expiry || user.premium_expiry > new Date().toISOString()));
 
     if (!isPremium) {
       return NextResponse.json(

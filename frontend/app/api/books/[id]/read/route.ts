@@ -16,16 +16,22 @@ export async function GET(
       return NextResponse.json({ success: false, error: 'Book not found' }, { status: 404 });
     }
 
-    // Check auth
-    const token = getTokenFromHeader(request.headers.get('authorization'));
+    // Check auth — fall back to cookie so iframe requests work
+    const token =
+      getTokenFromHeader(request.headers.get('authorization')) ||
+      request.cookies.get('token')?.value ||
+      null;
     let isPremium = false;
+    let isAdmin = false;
     if (token) {
       const decoded = verifyToken(token);
       if (decoded) {
+        isAdmin = decoded.role === 'admin';
         const user = await db.getById<db.User>('users', decoded.userId);
         isPremium =
-          user?.is_premium === true &&
-          (!user.premium_expiry || user.premium_expiry > new Date().toISOString());
+          isAdmin ||
+          (user?.is_premium === true &&
+            (!user.premium_expiry || user.premium_expiry > new Date().toISOString()));
       }
     }
 
