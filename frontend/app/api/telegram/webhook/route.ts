@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import * as db from '@/lib/tg-db';
+import { uploadThumbnailAsPhoto, formatFileSize } from '@/lib/tg-storage';
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const STORAGE_CHANNEL_ID = process.env.TELEGRAM_STORAGE_CHANNEL_ID;
 
 async function sendMessage(chatId: string | number, text: string, parseMode = 'HTML') {
   if (!BOT_TOKEN) return;
@@ -11,9 +14,67 @@ async function sendMessage(chatId: string | number, text: string, parseMode = 'H
   });
 }
 
+// Auto-create a book record when a PDF/EPUB is posted directly to the storage channel
+async function handleChannelPost(post: any) {
+  const doc = post.document;
+  if (!doc) return;
+
+  const isPdf = doc.mime_type === 'application/pdf';
+  const isEpub = doc.mime_type === 'application/epub+zip';
+  if (!isPdf && !isEpub) return;
+
+  // De-duplicate: skip if this file_id is already in the database
+  const existing = await db.findOne<db.Book>('books', (b) => b.telegram_file_id === doc.file_id);
+  if (existing) return;
+
+  const rawName = doc.file_name || 'Unknown Book';
+  const title = rawName.replace(/\.(pdf|epub)$/i, '').replace(/[-_]/g, ' ').trim();
+
+  // Use Telegram's auto-generated thumbnail (first page) as the cover
+  let coverFileId = '';
+  const thumb = doc.thumbnail || doc.thumb;
+  if (thumb?.file_id) {
+    const coverResult = await uploadThumbnailAsPhoto(thumb.file_id, title);
+    if (coverResult) coverFileId = coverResult.file_id;
+  }
+
+  await db.insert<db.Book>('books', {
+    title,
+    author: 'Unknown',
+    description: '',
+    cover_url: coverFileId,
+    pdf_url: isPdf ? doc.file_id : '',
+    epub_url: isEpub ? doc.file_id : '',
+    category: 'Uncategorized',
+    tags: [],
+    language: 'English',
+    total_pages: undefined,
+    file_size: formatFileSize(doc.file_size || 0),
+    is_premium: true,
+    is_featured: false,
+    download_count: 0,
+    view_count: 0,
+    telegram_file_id: doc.file_id,
+    preview_pages: [],
+    updated_at: new Date().toISOString(),
+  } as any);
+}
+
 export async function POST(request: NextRequest) {
   try {
     const update = await request.json();
+
+    // ── Channel post: auto-add books from storage channel ──────────────────────
+    const channelPost = update?.channel_post;
+    if (channelPost) {
+      const chatId = String(channelPost.chat?.id);
+      if (chatId === String(STORAGE_CHANNEL_ID)) {
+        await handleChannelPost(channelPost);
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    // ── Regular user messages (OTP, commands) ─────────────────────────────────
     const message = update?.message;
     if (!message) return NextResponse.json({ ok: true });
 
@@ -66,30 +127,16 @@ Copy this ID and use it when registering on QuantXBooks.
 3. Paste your Chat ID (<code>${chatId}</code>) in the field
 4. Click "Send OTP"
 5. I'll send you the OTP here!
-
-🌐 Visit QuantXBooks to get started.
       `);
       return NextResponse.json({ ok: true });
     }
 
-    // Check if it's a 6-digit OTP attempt
     if (/^\d{6}$/.test(text.trim())) {
-      await sendMessage(chatId, `
-⚠️ Please don't send OTP codes here.
-Enter the OTP on the QuantXBooks website to verify your account.
-      `);
+      await sendMessage(chatId, `⚠️ Please don't send OTP codes here. Enter the OTP on the QuantXBooks website.`);
       return NextResponse.json({ ok: true });
     }
 
-    // Default response
-    await sendMessage(chatId, `
-👋 Hi ${firstName}!
-
-Your Chat ID is: <code>${chatId}</code>
-
-Use /help to see available commands.
-    `);
-
+    await sendMessage(chatId, `👋 Hi ${firstName}! Your Chat ID is: <code>${chatId}</code>\n\nUse /help to see available commands.`);
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error('Telegram webhook error:', error);
@@ -97,7 +144,6 @@ Use /help to see available commands.
   }
 }
 
-// Verification endpoint for Telegram
-export async function GET(request: NextRequest) {
+export async function GET() {
   return NextResponse.json({ ok: true, service: 'QuantXBooks Telegram Bot' });
 }

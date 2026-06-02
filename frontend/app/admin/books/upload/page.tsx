@@ -15,6 +15,7 @@ interface UploadedFile {
   file_name: string;
   file_size: string;
   message_id: number;
+  auto_cover?: { file_id: string; file_name: string } | null;
 }
 
 type UploadState = 'idle' | 'uploading' | 'done' | 'error';
@@ -26,9 +27,10 @@ interface FileUploadZoneProps {
   bookTitle: string;
   onUploaded: (result: UploadedFile) => void;
   currentFileId?: string;
+  autoFilled?: boolean; // true when cover was auto-extracted from PDF
 }
 
-function FileUploadZone({ label, accept, type, bookTitle, onUploaded, currentFileId }: FileUploadZoneProps) {
+function FileUploadZone({ label, accept, type, bookTitle, onUploaded, currentFileId, autoFilled }: FileUploadZoneProps) {
   const [state, setState] = useState<UploadState>('idle');
   const [uploaded, setUploaded] = useState<UploadedFile | null>(null);
   const [progress, setProgress] = useState(0);
@@ -84,7 +86,25 @@ function FileUploadZone({ label, accept, type, bookTitle, onUploaded, currentFil
     <div>
       <label className="block text-sm font-medium text-gray-300 mb-1.5">{label}</label>
 
-      {state === 'done' && uploaded ? (
+      {autoFilled && state === 'idle' ? (
+        <div className="flex items-center gap-3 p-3 bg-blue-900/20 border border-blue-500/30 rounded-xl">
+          <CheckCircle className="w-5 h-5 text-blue-400 flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-white text-sm font-medium">Auto-extracted from PDF first page</p>
+            <p className="text-gray-400 text-xs">Saved in Telegram storage — you can still upload a custom cover below</p>
+          </div>
+          <button onClick={() => inputRef.current?.click()} className="text-xs text-blue-400 hover:text-blue-300 flex-shrink-0">
+            Replace
+          </button>
+          <input
+            ref={inputRef}
+            type="file"
+            accept={accept}
+            className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
+          />
+        </div>
+      ) : state === 'done' && uploaded ? (
         <div className="flex items-center gap-3 p-3 bg-green-900/20 border border-green-500/30 rounded-xl">
           <CheckCircle className="w-5 h-5 text-green-400 flex-shrink-0" />
           <div className="flex-1 min-w-0">
@@ -166,12 +186,18 @@ export default function UploadBookPage() {
     telegram_file_id: '', // main file_id fallback
     preview_pages: '',    // newline-separated URLs or file_ids
   });
+  const [autoCoverSet, setAutoCoverSet] = useState(false);
 
   const updateFileId = (field: keyof typeof form, result: UploadedFile) => {
     setForm((prev) => ({ ...prev, [field]: result.file_id }));
-    // Auto-fill file size if not set
     if (!form.file_size && result.file_size) {
       setForm((prev) => ({ ...prev, file_size: result.file_size }));
+    }
+    // When PDF is uploaded: if Telegram generated a first-page thumbnail, use it as cover
+    if ((field === 'pdf_url' || field === 'epub_url') && result.auto_cover && !form.cover_url) {
+      setForm((prev) => ({ ...prev, cover_url: result.auto_cover!.file_id }));
+      setAutoCoverSet(true);
+      toast.success('Cover auto-extracted from PDF first page!');
     }
   };
 
@@ -342,12 +368,13 @@ export default function UploadBookPage() {
           </h2>
 
           <FileUploadZone
-            label="Cover Image *"
+            label="Cover Image"
             accept="image/jpeg,image/png,image/webp"
             type="cover"
             bookTitle={form.title}
             currentFileId={form.cover_url}
-            onUploaded={(r) => updateFileId('cover_url', r)}
+            autoFilled={autoCoverSet}
+            onUploaded={(r) => { setAutoCoverSet(false); updateFileId('cover_url', r); }}
           />
 
           <FileUploadZone

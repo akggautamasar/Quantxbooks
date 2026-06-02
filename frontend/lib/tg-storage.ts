@@ -11,6 +11,7 @@ export interface UploadResult {
   file_size: number;
   message_id: number;
   file_name: string;
+  thumbnail_file_id?: string; // Telegram auto-generated thumbnail (first page for PDFs)
 }
 
 // Upload a file (Blob or ArrayBuffer) to the Telegram storage channel
@@ -50,13 +51,33 @@ export async function uploadFile(
   const msg = data.result;
   const fileObj = msg.document || msg.photo?.[msg.photo.length - 1];
 
+  // Telegram auto-generates a thumbnail for PDFs — usually the first page
+  const thumbObj = msg.document?.thumbnail || msg.document?.thumb;
+
   return {
     file_id: fileObj.file_id,
     file_unique_id: fileObj.file_unique_id,
     file_size: fileObj.file_size || 0,
     message_id: msg.message_id,
     file_name: fileName,
+    thumbnail_file_id: thumbObj?.file_id,
   };
+}
+
+// Download a Telegram thumbnail and re-upload it as a cover photo to the storage channel
+export async function uploadThumbnailAsPhoto(
+  thumbnailFileId: string,
+  baseName: string
+): Promise<UploadResult | null> {
+  try {
+    const filePath = await getFilePath(thumbnailFileId);
+    const res = await fetch(`${TG_FILE}/${filePath}`);
+    if (!res.ok) return null;
+    const blob = new Blob([await res.arrayBuffer()], { type: 'image/jpeg' });
+    return await uploadFile(blob, `${baseName}-cover.jpg`, 'cover', `[COVER] ${baseName}`);
+  } catch {
+    return null;
+  }
 }
 
 // Get the Telegram download path for a file_id
