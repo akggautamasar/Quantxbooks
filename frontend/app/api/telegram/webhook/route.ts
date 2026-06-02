@@ -4,7 +4,6 @@ import { uploadThumbnailAsPhoto, formatFileSize } from '@/lib/tg-storage';
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const STORAGE_CHANNEL_ID = process.env.TELEGRAM_STORAGE_CHANNEL_ID;
-const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
 
 async function sendMessage(chatId: string | number, text: string, parseMode = 'HTML') {
   if (!BOT_TOKEN) return;
@@ -67,9 +66,8 @@ async function handleChannelPost(post: any) {
   await ingestDocument(post.document);
 }
 
-// Handle admin forwarding old PDFs from channel to the bot
-async function handleAdminForward(message: any) {
-  if (String(message.chat?.id) !== String(ADMIN_CHAT_ID)) return false;
+// Handle any user forwarding a PDF/EPUB to the bot — ingest it as a book
+async function handleDocumentMessage(message: any) {
   const doc = message.document;
   if (!doc) return false;
 
@@ -77,15 +75,19 @@ async function handleAdminForward(message: any) {
   const isEpub = doc.mime_type === 'application/epub+zip';
   if (!isPdf && !isEpub) return false;
 
+  const chatId = message.chat.id;
   const existing = await db.findOne<db.Book>('books', (b) => b.telegram_file_id === doc.file_id);
   if (existing) {
-    await sendMessage(message.chat.id, `⚠️ Already in library: <b>${existing.title}</b>`);
+    await sendMessage(chatId, `⚠️ Already in library: <b>${existing.title}</b>`);
     return true;
   }
 
+  await sendMessage(chatId, `⏳ Adding to library...`);
   const { created, title } = await ingestDocument(doc);
   if (created) {
-    await sendMessage(message.chat.id, `✅ Added to library: <b>${title}</b>\n\nGo to /admin/books to edit details (author, category, etc.)`);
+    await sendMessage(chatId, `✅ Added: <b>${title}</b>\n\nEdit title/author/category at /admin/books`);
+  } else {
+    await sendMessage(chatId, `❌ Could not add — file type not supported.`);
   }
   return true;
 }
@@ -107,8 +109,8 @@ export async function POST(request: NextRequest) {
     const text = (message.text || '').trim();
     const firstName = message.from?.first_name || 'User';
 
-    // ── Admin forwarding existing PDFs to add retroactively ────────────────────
-    if (await handleAdminForward(message)) {
+    // ── PDF/EPUB forwarded to bot → ingest as book ─────────────────────────────
+    if (await handleDocumentMessage(message)) {
       return NextResponse.json({ ok: true });
     }
 

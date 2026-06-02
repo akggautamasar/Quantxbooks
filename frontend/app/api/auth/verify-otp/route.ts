@@ -69,11 +69,20 @@ export async function POST(request: NextRequest) {
 
     const token = signToken({ userId: user.id, mobile: user.mobile, role: user.role });
 
-    return NextResponse.json({
+    const res = NextResponse.json({
       success: true,
       message: 'Login successful',
       data: { token, user },
     });
+    // Set cookie server-side so middleware sees it on the very next request
+    res.cookies.set('token', token, {
+      path: '/',
+      maxAge: 30 * 24 * 60 * 60,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      httpOnly: false, // must be false so client JS can also read it if needed
+    });
+    return res;
   } catch (err) {
     console.error('Verify OTP error:', err);
     return NextResponse.json({ success: false, error: 'Verification failed' }, { status: 500 });
