@@ -64,6 +64,8 @@ export default function LoginPage() {
 
       localStorage.setItem('token', data.data.token);
       localStorage.setItem('user', JSON.stringify(data.data.user));
+      // Set cookie so middleware can see it (30d, matches JWT expiry)
+      document.cookie = `token=${data.data.token}; path=/; max-age=${30 * 24 * 60 * 60}; SameSite=Lax`;
       toast.success('Welcome back!');
       router.push(data.data.user.role === 'admin' ? '/admin' : '/dashboard');
     } catch (err: any) {

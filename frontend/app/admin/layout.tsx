@@ -40,6 +40,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    document.cookie = 'token=; path=/; max-age=0; SameSite=Lax';
     router.push('/');
   };
 

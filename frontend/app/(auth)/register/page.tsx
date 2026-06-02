@@ -71,6 +71,7 @@ export default function RegisterPage() {
 
       localStorage.setItem('token', data.data.token);
       localStorage.setItem('user', JSON.stringify(data.data.user));
+      document.cookie = `token=${data.data.token}; path=/; max-age=${30 * 24 * 60 * 60}; SameSite=Lax`;
       toast.success('Welcome to QuantXBooks! 🎉');
       router.push('/dashboard');
     } catch (err: any) {
