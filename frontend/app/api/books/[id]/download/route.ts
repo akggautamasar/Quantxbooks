@@ -61,9 +61,6 @@ export async function GET(
     const ext = format === 'epub' ? 'epub' : 'pdf';
     const safeTitle = book.title.replace(/[^a-zA-Z0-9\s]/g, '').trim().replace(/\s+/g, '_');
 
-    // Increment download count (non-blocking)
-    db.update<db.Book>('books', book.id, { download_count: book.download_count + 1 } as any).catch(() => {});
-
     const headers: Record<string, string> = {
       'Content-Type': contentType,
       'Content-Disposition': `attachment; filename="${safeTitle}.${ext}"`,

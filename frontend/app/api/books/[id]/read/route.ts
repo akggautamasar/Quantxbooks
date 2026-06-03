@@ -7,6 +7,13 @@ import { downloadByMessageId, isAvailable as isMTProtoAvailable } from '@/lib/tg
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
+// In-memory view-count accumulator. Avoids a full Telegram DB write on every
+// read request, which was causing concurrent-write races that lost book records.
+const _viewCounts = new Map<string, number>();
+
+// Exported so other routes can read the per-instance accumulated counts.
+export { _viewCounts };
+
 export async function GET(
   request: NextRequest,
   { params }: { params: { id: string } }
@@ -62,8 +69,11 @@ export async function GET(
       return h;
     };
 
-    // Update read count (non-blocking)
-    db.update<db.Book>('books', book.id, { view_count: book.view_count + 1 } as any).catch(() => {});
+    // Note: view_count updates removed — each update triggers a full Telegram DB write.
+    // In a multi-instance serverless environment, concurrent view_count writes from
+    // different lambda instances overwrite each other's DB snapshots, causing books
+    // to disappear. Counts are tracked in-memory per instance only.
+    _viewCounts.set(book.id, (_viewCounts.get(book.id) ?? (book.view_count || 0)) + 1);
 
     // Try Bot API first (works for files ≤ 20 MB)
     if (fileId) {

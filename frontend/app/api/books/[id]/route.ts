@@ -12,9 +12,6 @@ export async function GET(
       return NextResponse.json({ success: false, error: 'Book not found' }, { status: 404 });
     }
 
-    // Increment view count (non-blocking)
-    db.update<db.Book>('books', book.id, { view_count: book.view_count + 1 } as any).catch(() => {});
-
     // Check premium status
     const token = getTokenFromHeader(request.headers.get('authorization'));
     let isPremiumUser = false;
