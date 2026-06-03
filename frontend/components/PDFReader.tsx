@@ -4,8 +4,11 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2, BookOpen } from 'lucide-react';
 
-// PDF.js worker — use CDN for pdfjs-dist v4
-pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+// Use webpack module resolution for the PDF.js worker — more reliable than CDN in production
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
+  import.meta.url,
+).toString();
 
 interface PDFReaderProps {
   bookId: string;
@@ -21,6 +24,11 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
   const [docError, setDocError] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [pageWidth, setPageWidth] = useState(400);
+  const [token, setToken] = useState<string | null>(null);
+
+  useEffect(() => {
+    setToken(localStorage.getItem('token'));
+  }, []);
 
   // Touch swipe tracking
   const touchStartX = useRef(0);
@@ -48,7 +56,9 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
     }
   };
 
-  const pdfUrl = `/api/books/${bookId}/read`;
+  const pdfFile = token
+    ? { url: `/api/books/${bookId}/read`, httpHeaders: { Authorization: `Bearer ${token}` } }
+    : `/api/books/${bookId}/read`;
   const scaledWidth = Math.min(pageWidth * scale, 1200);
 
   return (
@@ -86,7 +96,7 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
         ) : (
           <div className="py-4 px-1">
             <Document
-              file={pdfUrl}
+              file={pdfFile}
               onLoadSuccess={({ numPages }) => setNumPages(numPages)}
               onLoadError={() => setDocError(true)}
               loading={
