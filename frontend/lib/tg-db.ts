@@ -218,13 +218,17 @@ async function saveDb(db: TGDatabase): Promise<void> {
   _cacheTs = Date.now();
 }
 
-// Serialize writes to avoid race conditions
+// Serialize writes to avoid race conditions.
+// Each write recovers from previous failures so a single Telegram hiccup
+// (rate limit, transient error) doesn't permanently block the queue.
 async function write(fn: (db: TGDatabase) => void | TGDatabase): Promise<void> {
-  _writeQueue = _writeQueue.then(async () => {
-    const db = await loadDb();
-    const result = fn(db);
-    await saveDb(result !== undefined ? result : db);
-  });
+  _writeQueue = _writeQueue
+    .catch(() => {}) // previous failure must not block future writes
+    .then(async () => {
+      const db = await loadDb();
+      const result = fn(db);
+      await saveDb(result !== undefined ? result : db);
+    });
   return _writeQueue;
 }
 
