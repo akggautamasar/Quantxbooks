@@ -97,7 +97,7 @@ export async function GET(
         );
       }
       const buffer = await downloadByMessageId(book.telegram_message_id);
-      return new NextResponse(buffer, {
+      return new NextResponse(new Uint8Array(buffer), {
         status: 200,
         headers: buildHeaders(buffer.byteLength.toString()),
       });
