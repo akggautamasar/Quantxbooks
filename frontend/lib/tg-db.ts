@@ -173,8 +173,11 @@ async function loadDb(forceFresh = false): Promise<TGDatabase> {
     return db;
   } catch (err) {
     console.error('[tg-db] loadDb error:', err);
-    // Return cache if available, otherwise empty db
-    return _cache || emptyDb();
+    // Serve stale cache rather than pretending the DB is empty. An empty DB
+    // causes every lookup to silently return null ("Book not found") when in
+    // reality Telegram is temporarily unavailable.
+    if (_cache) return _cache;
+    throw err; // no cache — let the caller surface the real error
   }
 }
 
@@ -255,9 +258,11 @@ export async function getById<T extends { id: string }>(
   let db = await loadDb();
   let found = (db[collection] as unknown as T[]).find((item) => item.id === id);
   if (!found) {
-    // A miss may just mean this instance's cache predates a recent ingestion.
-    // Force one fresh load from Telegram before declaring the record absent —
-    // this is what fixes "Book not found" right after a new upload appears.
+    // Miss can mean either (a) this lambda's cache predates a recent write, or
+    // (b) Telegram's editMessageMedia hasn't propagated yet to other instances.
+    // Wait 800 ms so Telegram has time to propagate the write, then retry once
+    // with a forced fresh load before declaring the record absent.
+    await new Promise((r) => setTimeout(r, 800));
     db = await loadDb(true);
     found = (db[collection] as unknown as T[]).find((item) => item.id === id);
   }

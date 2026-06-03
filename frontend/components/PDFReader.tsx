@@ -46,8 +46,19 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
       .then(async (res) => {
         if (!res.ok) {
           const raw = await res.text().catch(() => '');
-          let msg = `HTTP ${res.status}`;
-          try { msg = JSON.parse(raw).error || msg; } catch {}
+          let msg: string;
+          try {
+            msg = JSON.parse(raw).error || '';
+          } catch {
+            msg = '';
+          }
+          if (!msg) {
+            if (res.status === 504 || res.status === 408) msg = 'The file took too long to load. Please retry — large books may take a moment.';
+            else if (res.status === 503) msg = 'Database temporarily unavailable. Please retry in a moment.';
+            else if (res.status === 413) msg = `This book is too large to stream. ${msg || ''}`.trim();
+            else if (res.status === 403) msg = 'Premium subscription required to read this book.';
+            else msg = `Error ${res.status} — please retry.`;
+          }
           throw new Error(msg);
         }
         return res.blob();

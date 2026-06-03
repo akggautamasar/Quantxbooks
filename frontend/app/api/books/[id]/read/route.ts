@@ -100,11 +100,26 @@ export async function GET(
           { status: 413 }
         );
       }
-      const buffer = await downloadByMessageId(book.telegram_message_id);
-      return new NextResponse(new Uint8Array(buffer), {
-        status: 200,
-        headers: buildHeaders(buffer.byteLength.toString()),
-      });
+      try {
+        const buffer = await downloadByMessageId(book.telegram_message_id);
+        return new NextResponse(new Uint8Array(buffer), {
+          status: 200,
+          headers: buildHeaders(buffer.byteLength.toString()),
+        });
+      } catch (mtErr: any) {
+        if (mtErr?.message?.startsWith('FILE_TOO_LARGE:')) {
+          const bytes = parseInt(mtErr.message.split(':')[1] || '0', 10);
+          const mb = (bytes / (1024 * 1024)).toFixed(0);
+          return NextResponse.json(
+            {
+              success: false,
+              error: `This PDF is ${mb} MB — too large to stream on this server. The admin needs to host it externally or split it into smaller parts.`,
+            },
+            { status: 413 }
+          );
+        }
+        throw mtErr;
+      }
     }
 
     return NextResponse.json(
@@ -117,6 +132,14 @@ export async function GET(
     );
   } catch (err: any) {
     console.error('Read error:', err);
+    const msg = err?.message || '';
+    // Surface DB-unavailable errors distinctly from "book doesn't exist"
+    if (msg.includes('getChat') || msg.includes('getFile') || msg.includes('description')) {
+      return NextResponse.json(
+        { success: false, error: 'Database temporarily unavailable — please retry in a moment' },
+        { status: 503 }
+      );
+    }
     return NextResponse.json({ success: false, error: 'Failed to stream book' }, { status: 500 });
   }
 }

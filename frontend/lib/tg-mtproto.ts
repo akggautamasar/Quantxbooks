@@ -25,6 +25,9 @@ async function getClient(): Promise<TelegramClient> {
   return client;
 }
 
+// 80 MB hard limit — larger files time out Vercel's 60s function limit.
+const MAX_MTPROTO_BYTES = 80 * 1024 * 1024;
+
 export async function downloadByMessageId(messageId: number): Promise<Buffer> {
   if (!isAvailable()) {
     throw new Error('MTProto not configured: TELEGRAM_API_ID and TELEGRAM_API_HASH env vars required');
@@ -40,6 +43,14 @@ export async function downloadByMessageId(messageId: number): Promise<Buffer> {
 
   const msg = messages[0];
   if (!msg.media) throw new Error('No media found in message');
+
+  // Fail fast for files that would exceed Vercel's function timeout.
+  const fileSize: number = (msg.media as any)?.document?.size ?? 0;
+  if (fileSize > MAX_MTPROTO_BYTES) {
+    throw new Error(
+      `FILE_TOO_LARGE:${fileSize}`
+    );
+  }
 
   const result = await client.downloadMedia(msg, {});
   if (!result) throw new Error('downloadMedia returned empty result');
