@@ -41,7 +41,7 @@ export async function downloadByMessageId(messageId: number): Promise<Buffer> {
   const msg = messages[0];
   if (!msg.media) throw new Error('No media found in message');
 
-  const result = await client.downloadMedia(msg, { workers: 4 });
+  const result = await client.downloadMedia(msg, {});
   if (!result) throw new Error('downloadMedia returned empty result');
 
   return Buffer.isBuffer(result) ? result : Buffer.from(result as any);
