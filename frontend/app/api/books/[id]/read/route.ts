@@ -3,9 +3,12 @@ import * as db from '@/lib/tg-db';
 import { fetchFile } from '@/lib/tg-storage';
 import { verifyToken, getTokenFromHeader } from '@/lib/auth';
 import { viewCounts } from '@/lib/view-counts';
+import * as mtproto from '@/lib/tg-mtproto';
 
 export const runtime = 'nodejs';
-export const maxDuration = 30;
+// No maxDuration cap needed on Render — persistent server handles any file size.
+// Leave a generous limit for Vercel compatibility just in case.
+export const maxDuration = 300;
 
 export async function GET(
   request: NextRequest,
@@ -42,17 +45,12 @@ export async function GET(
       );
     }
 
-    // Books uploaded via admin panel or auto-converted are served as page images
-    // through /api/books/[id]/cover?page=N — this route is only a fallback for
-    // legacy channel-uploaded books that still have a pdf_url.
+    // Image-mode books are served page-by-page via /api/books/[id]/cover?page=N.
+    // This route handles all other books — Bot API for ≤20 MB, MTProto for larger.
     const fileId = book.pdf_url || book.telegram_file_id;
     if (!fileId) {
       return NextResponse.json(
-        {
-          success: false,
-          error:
-            'This book has no streamable file. If the cover shows pages, try reloading — it may still be processing.',
-        },
+        { success: false, error: 'No file attached to this book.' },
         { status: 404 }
       );
     }
@@ -60,43 +58,50 @@ export async function GET(
     viewCounts.set(book.id, (viewCounts.get(book.id) ?? (book.view_count || 0)) + 1);
 
     const safeTitle = book.title.replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_') || 'book';
-    const buildHeaders = (contentLength?: string | null): Record<string, string> => {
+    const pdfHeaders = (contentLength?: string | number | null): Record<string, string> => {
       const h: Record<string, string> = {
         'Content-Type': 'application/pdf',
         'Content-Disposition': `inline; filename="${safeTitle}.pdf"`,
         'Cache-Control': 'private, max-age=3600',
         'X-Content-Type-Options': 'nosniff',
       };
-      if (contentLength) h['Content-Length'] = contentLength;
+      if (contentLength != null) h['Content-Length'] = String(contentLength);
       return h;
     };
 
+    // ── Try Bot API first (works for files ≤ 20 MB) ───────────────────────────
     try {
       const tgResponse = await fetchFile(fileId);
       if (tgResponse.ok) {
         return new NextResponse(tgResponse.body, {
           status: 200,
-          headers: buildHeaders(tgResponse.headers.get('content-length')),
+          headers: pdfHeaders(tgResponse.headers.get('content-length')),
         });
       }
     } catch (err: any) {
       const msg: string = err?.message || '';
-      if (msg.includes('file is too big') || msg.includes('too big')) {
-        return NextResponse.json(
-          {
-            success: false,
-            error:
-              'This file is too large to stream. Please ask the admin to re-upload it via Admin → Upload so it is stored as page images.',
-          },
-          { status: 413 }
-        );
-      }
-      throw err;
+      // Bot API rejects files > 20 MB — fall through to MTProto below
+      if (!msg.includes('file is too big') && !msg.includes('too big')) throw err;
+    }
+
+    // ── MTProto fallback for files > 20 MB ────────────────────────────────────
+    // Works on any persistent server (Render, VPS, etc.). On Vercel serverless
+    // this may time out for very large files.
+    if (book.telegram_message_id && mtproto.isAvailable()) {
+      const buffer = await mtproto.downloadByMessageId(book.telegram_message_id);
+      return new NextResponse(buffer as unknown as BodyInit, {
+        status: 200,
+        headers: pdfHeaders(buffer.length),
+      });
     }
 
     return NextResponse.json(
-      { success: false, error: 'Failed to fetch file from Telegram' },
-      { status: 502 }
+      {
+        success: false,
+        error:
+          'This file is larger than 20 MB and requires MTProto credentials (TELEGRAM_API_ID / TELEGRAM_API_HASH) to stream. Set them in your environment variables.',
+      },
+      { status: 413 }
     );
   } catch (err: any) {
     console.error('Read error:', err);

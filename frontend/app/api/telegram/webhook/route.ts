@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import * as db from '@/lib/tg-db';
-import { fetchFile, uploadFile, formatFileSize } from '@/lib/tg-storage';
-import { pdfToJpegPages } from '@/lib/pdf-to-images';
+import { formatFileSize } from '@/lib/tg-storage';
 
 export const runtime = 'nodejs';
-// Allow up to 60 s so page-image conversion can complete for most books.
-export const maxDuration = 60;
+export const maxDuration = 30;
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const STORAGE_CHANNEL_ID = process.env.TELEGRAM_STORAGE_CHANNEL_ID;
@@ -19,47 +17,16 @@ async function sendMessage(chatId: string | number, text: string, parseMode = 'H
   });
 }
 
-// Download the PDF (Bot API, ≤ 20 MB), render every page to JPEG, upload each
-// page as a Telegram photo, then update the book record with preview_pages.
-async function convertBookToPageImages(bookId: string, fileId: string, fileSizeBytes: number) {
-  const TWENTY_MB = 20 * 1024 * 1024;
-  if (fileSizeBytes > TWENTY_MB) return; // Bot API cannot download files >20 MB
-
-  try {
-    const tgRes = await fetchFile(fileId);
-    if (!tgRes.ok) return;
-    const pdfData = await tgRes.arrayBuffer();
-
-    const jpegs = await pdfToJpegPages(pdfData, 1.5, 0.8);
-    if (jpegs.length === 0) return;
-
-    const fileIds: string[] = [];
-    for (let i = 0; i < jpegs.length; i++) {
-      const blob = new Blob([new Uint8Array(jpegs[i])], { type: 'image/jpeg' });
-      const result = await uploadFile(blob, `${bookId}-p${i + 1}.jpg`, 'preview');
-      fileIds.push(result.file_id);
-    }
-
-    await db.update<db.Book>('books', bookId, {
-      preview_pages: fileIds,
-      cover_url: fileIds[0],
-      pdf_url: '',
-      total_pages: fileIds.length,
-    });
-  } catch (err) {
-    console.error('[webhook] page-image conversion failed for book', bookId, err);
-  }
-}
-
-// Create a book record from a Telegram document object and convert it to page images.
+// Ingest a Telegram document into the books collection.
+// messageId is the storage-channel message ID (needed for MTProto streaming of >20 MB files).
 async function ingestDocument(
   doc: any,
+  messageId?: number,
 ): Promise<{ created: boolean; title: string }> {
   const isPdf = doc.mime_type === 'application/pdf';
   const isEpub = doc.mime_type === 'application/epub+zip';
   if (!isPdf && !isEpub) return { created: false, title: '' };
 
-  // De-duplicate by file_id
   const existing = await db.findOne<db.Book>('books', (b) => b.telegram_file_id === doc.file_id);
   if (existing) return { created: false, title: existing.title };
 
@@ -69,7 +36,7 @@ async function ingestDocument(
   const thumb = doc.thumbnail || doc.thumb;
   const coverFileId = thumb?.file_id || '';
 
-  const record = await db.insert<db.Book>('books', {
+  await db.insert<db.Book>('books', {
     title,
     author: 'Unknown',
     description: '',
@@ -86,28 +53,22 @@ async function ingestDocument(
     download_count: 0,
     view_count: 0,
     telegram_file_id: doc.file_id,
+    telegram_message_id: messageId,
     preview_pages: [],
     updated_at: new Date().toISOString(),
   } as any);
 
-  // Convert PDF to page images synchronously (within the 60 s function window).
-  // EPUBs are served from pdf_url / epub_url and do not need page conversion.
-  if (isPdf) {
-    await convertBookToPageImages(record.id, doc.file_id, doc.file_size || 0);
-  }
-
   return { created: true, title };
 }
 
-// Handle new document posted directly to the storage channel
 async function handleChannelPost(post: any) {
   if (!post.document) return;
   const chatId = String(post.chat?.id);
   if (chatId !== String(STORAGE_CHANNEL_ID)) return;
-  await ingestDocument(post.document);
+  // Pass message_id so the read route can use MTProto for files > 20 MB
+  await ingestDocument(post.document, post.message_id);
 }
 
-// Handle any user forwarding a PDF/EPUB to the bot
 async function handleDocumentMessage(message: any) {
   const doc = message.document;
   if (!doc) return false;
@@ -123,15 +84,7 @@ async function handleDocumentMessage(message: any) {
     return true;
   }
 
-  const TWENTY_MB = 20 * 1024 * 1024;
-  const tooBig = isPdf && (doc.file_size || 0) > TWENTY_MB;
-  await sendMessage(
-    chatId,
-    tooBig
-      ? `⏳ Adding to library... (file is &gt;20 MB — please also upload via Admin → Upload for page-image reading)`
-      : `⏳ Adding to library and converting pages…`
-  );
-
+  await sendMessage(chatId, `⏳ Adding to library...`);
   const { created, title } = await ingestDocument(doc);
   if (created) {
     await sendMessage(chatId, `✅ Added: <b>${title}</b>\n\nEdit title/author/category at /admin/books`);
