@@ -185,6 +185,7 @@ export default function UploadBookPage() {
     is_featured: false,
     telegram_file_id: '', // main file_id fallback
     preview_pages: '',    // newline-separated URLs or file_ids
+    pdf_message_id: 0,    // stored for MTProto large-file streaming
   });
   const [autoCoverSet, setAutoCoverSet] = useState(false);
 
@@ -192,6 +193,10 @@ export default function UploadBookPage() {
     setForm((prev) => ({ ...prev, [field]: result.file_id }));
     if (!form.file_size && result.file_size) {
       setForm((prev) => ({ ...prev, file_size: result.file_size }));
+    }
+    // Store message_id for MTProto large-file streaming
+    if (field === 'pdf_url' && result.message_id) {
+      setForm((prev) => ({ ...prev, pdf_message_id: result.message_id }));
     }
     // When PDF is uploaded: if Telegram generated a first-page thumbnail, use it as cover
     if ((field === 'pdf_url' || field === 'epub_url') && result.auto_cover && !form.cover_url) {
@@ -230,6 +235,7 @@ export default function UploadBookPage() {
             : [],
           // Use pdf_url as telegram_file_id if not separately set
           telegram_file_id: form.telegram_file_id || form.pdf_url,
+          telegram_message_id: form.pdf_message_id || undefined,
         }),
       });
       const data = await res.json();

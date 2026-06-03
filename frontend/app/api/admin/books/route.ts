@@ -43,6 +43,7 @@ export async function POST(request: NextRequest) {
       download_count: 0,
       view_count: 0,
       telegram_file_id: body.telegram_file_id || '',
+      telegram_message_id: body.telegram_message_id || undefined,
       preview_pages: body.preview_pages || [],
       updated_at: new Date().toISOString(),
     } as any);

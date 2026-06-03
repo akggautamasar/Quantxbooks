@@ -40,6 +40,7 @@ export interface Book {
   download_count: number;
   view_count: number;
   telegram_file_id?: string;
+  telegram_message_id?: number;
   created_at: string;
   updated_at: string;
 }

@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import * as db from '@/lib/tg-db';
 import { fetchFile } from '@/lib/tg-storage';
 import { verifyToken, getTokenFromHeader } from '@/lib/auth';
-import { FREE_PREVIEW_PAGES } from '@/lib/constants';
+import { downloadByMessageId, isAvailable as isMTProtoAvailable } from '@/lib/tg-mtproto';
 
 export const runtime = 'nodejs';
+export const maxDuration = 60;
 
 export async function GET(
   request: NextRequest,
@@ -35,55 +36,83 @@ export async function GET(
       }
     }
 
-    // Determine which file to serve
     const needsPremium = book.is_premium && !isPremium;
-
     if (needsPremium) {
-      // Non-premium: only allow if book has preview pages (handled client-side)
       return NextResponse.json(
         { success: false, error: 'Premium subscription required', code: 'PREMIUM_REQUIRED' },
         { status: 403 }
       );
     }
 
-    // Get the file_id to stream
     const fileId = book.pdf_url || book.telegram_file_id;
-    if (!fileId) {
+    if (!fileId && !book.telegram_message_id) {
       return NextResponse.json({ success: false, error: 'No readable file available' }, { status: 404 });
     }
 
-    // Proxy the file from Telegram
-    const tgResponse = await fetchFile(fileId);
-    if (!tgResponse.ok) {
-      return NextResponse.json({ success: false, error: 'Failed to fetch book file' }, { status: 502 });
-    }
-
-    // Always force application/pdf — Telegram returns application/octet-stream
-    // which causes browsers to download instead of display inline.
-    const contentLength = tgResponse.headers.get('content-length');
     const safeTitle = book.title.replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_') || 'book';
+
+    const buildHeaders = (contentLength?: string | null): Record<string, string> => {
+      const h: Record<string, string> = {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `inline; filename="${safeTitle}.pdf"`,
+        'Cache-Control': 'private, max-age=3600',
+        'X-Content-Type-Options': 'nosniff',
+      };
+      if (contentLength) h['Content-Length'] = contentLength;
+      return h;
+    };
 
     // Update read count (non-blocking)
     db.update<db.Book>('books', book.id, { view_count: book.view_count + 1 } as any).catch(() => {});
 
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': `inline; filename="${safeTitle}.pdf"`,
-      'Cache-Control': 'private, max-age=3600',
-      'X-Content-Type-Options': 'nosniff',
-    };
-    if (contentLength) headers['Content-Length'] = contentLength;
+    // Try Bot API first (works for files ≤ 20 MB)
+    if (fileId) {
+      try {
+        const tgResponse = await fetchFile(fileId);
+        if (tgResponse.ok) {
+          return new NextResponse(tgResponse.body, {
+            status: 200,
+            headers: buildHeaders(tgResponse.headers.get('content-length')),
+          });
+        }
+      } catch (err: any) {
+        const msg: string = err?.message || '';
+        if (!(msg.includes('file is too big') || msg.includes('too big'))) {
+          throw err;
+        }
+        // Fall through to MTProto for large files
+      }
+    }
 
-    return new NextResponse(tgResponse.body, { status: 200, headers });
+    // MTProto fallback for files > 20 MB
+    if (book.telegram_message_id) {
+      if (!isMTProtoAvailable()) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              'This PDF is larger than 20 MB. MTProto streaming is not configured on this server — the admin needs to set TELEGRAM_API_ID and TELEGRAM_API_HASH.',
+          },
+          { status: 413 }
+        );
+      }
+      const buffer = await downloadByMessageId(book.telegram_message_id);
+      return new NextResponse(buffer, {
+        status: 200,
+        headers: buildHeaders(buffer.byteLength.toString()),
+      });
+    }
+
+    return NextResponse.json(
+      {
+        success: false,
+        error:
+          "This PDF exceeds Telegram's 20 MB streaming limit. The admin needs to re-upload it so the message ID is stored for MTProto streaming.",
+      },
+      { status: 413 }
+    );
   } catch (err: any) {
     console.error('Read error:', err);
-    const msg: string = err?.message || '';
-    if (msg.includes('file is too big') || msg.includes('too big')) {
-      return NextResponse.json(
-        { success: false, error: 'This PDF exceeds Telegram\'s 20 MB streaming limit. The admin needs to re-upload it via a larger storage provider.' },
-        { status: 413 }
-      );
-    }
     return NextResponse.json({ success: false, error: 'Failed to stream book' }, { status: 500 });
   }
 }
