@@ -1,0 +1,59 @@
+version: "1"
+
+services:
+  # ── Main web app ─────────────────────────────────────────────────────────────
+  - type: web
+    name: quantxbooks
+    env: node
+    region: oregon          # change to singapore / frankfurt if closer to your users
+    rootDir: frontend
+    buildCommand: npm install --legacy-peer-deps && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    # Recommended: Starter ($7/mo) — 512 MB RAM may be tight for PDF rendering on Free
+    # plan: starter
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      # ── Telegram ──────────────────────────────────────────────────────────────
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false           # fill in Render dashboard
+      - key: TELEGRAM_DB_CHAT_ID
+        sync: false
+      - key: TELEGRAM_STORAGE_CHANNEL_ID
+        sync: false
+      # Required for >20 MB PDF conversion (MTProto). Get from https://my.telegram.org
+      - key: TELEGRAM_API_ID
+        sync: false
+      - key: TELEGRAM_API_HASH
+        sync: false
+
+      # ── Auth ──────────────────────────────────────────────────────────────────
+      - key: JWT_SECRET
+        sync: false
+      # Set to your Render service URL, e.g. https://quantxbooks.onrender.com
+      - key: NEXTAUTH_URL
+        sync: false
+
+      # ── Cron security ─────────────────────────────────────────────────────────
+      # Optional but recommended: set a random secret and use the same value
+      # for both services so the cron job can authenticate with the web app.
+      - key: CRON_SECRET
+        sync: false
+
+  # ── Background cron: convert pending books to page images ────────────────────
+  - type: cron
+    name: quantxbooks-convert-books
+    env: node
+    region: oregon
+    rootDir: frontend
+    schedule: "*/5 * * * *"   # every 5 minutes
+    buildCommand: npm install --legacy-peer-deps
+    startCommand: node scripts/convert-books.js
+    envVars:
+      # Must match the web service URL
+      - key: APP_URL
+        sync: false           # e.g. https://quantxbooks.onrender.com
+      - key: CRON_SECRET
+        sync: false
