@@ -4,6 +4,13 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2, BookOpen, RefreshCw } from 'lucide-react';
 
+// pdfjs-dist 3.11.174 ships a plain CommonJS worker (.js) — no ES module issues.
+// Must match the pdfjs-dist version react-pdf uses internally (3.11.174).
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.js',
+  import.meta.url,
+).toString();
+
 interface PDFReaderProps {
   bookId: string;
   title: string;
@@ -22,21 +29,6 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
   const [pageWidth, setPageWidth] = useState(400);
 
   const touchStartX = useRef(0);
-
-  // Create PDF.js worker via webpack's native new Worker(new URL(...)) pattern.
-  // This compiles the worker to a classic chunk — no MIME type / ES-module-in-worker issues.
-  useEffect(() => {
-    const worker = new Worker(
-      new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url)
-    );
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (pdfjs.GlobalWorkerOptions as any).workerPort = worker;
-    return () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (pdfjs.GlobalWorkerOptions as any).workerPort = null;
-      worker.terminate();
-    };
-  }, []);
 
   // Fetch the PDF as a blob so we own the response and can inspect errors
   const loadPdf = useCallback(() => {

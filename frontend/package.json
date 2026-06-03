@@ -14,7 +14,7 @@
     "react-dom": "^18",
     "react-pdf": "^7.7.3",
     "epubjs": "^0.3.93",
-    "pdfjs-dist": "^4.2.67",
+    "pdfjs-dist": "3.11.174",
     "jsonwebtoken": "^9.0.2",
     "bcryptjs": "^2.4.3",
     "axios": "^1.7.2",
