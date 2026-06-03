@@ -9,6 +9,18 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
 const STORAGE_CHANNEL_ID = process.env.TELEGRAM_STORAGE_CHANNEL_ID!;
 const TG_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
+// Optional: restrict who can add books by sending files to the bot.
+// Comma-separated Telegram user IDs. If empty, anyone may add books (legacy behaviour).
+const ADMIN_IDS = (process.env.TELEGRAM_ADMIN_IDS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+function isAdminUser(userId: number | string | undefined): boolean {
+  if (ADMIN_IDS.length === 0) return true; // no restriction configured
+  return ADMIN_IDS.includes(String(userId));
+}
+
 async function sendMessage(chatId: string | number, text: string, parseMode = 'HTML') {
   await fetch(`${TG_API}/sendMessage`, {
     method: 'POST',
@@ -18,17 +30,18 @@ async function sendMessage(chatId: string | number, text: string, parseMode = 'H
 }
 
 /**
- * Forward a DM message to the storage channel.
- * Forwarding never re-uploads — Telegram just creates a pointer, so it works
- * for files of any size (even > 20 MB). MTProto can then always look in the
- * storage channel, which it can always resolve.
+ * Copy a DM message into the storage channel — BeyondDrive's `message.copy`
+ * pattern. copyMessage references the same underlying file server-side, so it
+ * never re-uploads and works for files of any size (even > 20 MB). Unlike
+ * forwardMessage it produces a clean standalone message (no "Forwarded from"
+ * header). MTProto can then always resolve the file in the storage channel.
  * Returns the storage-channel message_id, or null on failure.
  */
-async function forwardToStorageChannel(
+async function copyToStorageChannel(
   fromChatId: number,
   messageId: number,
 ): Promise<number | null> {
-  const res = await fetch(`${TG_API}/forwardMessage`, {
+  const res = await fetch(`${TG_API}/copyMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -40,7 +53,7 @@ async function forwardToStorageChannel(
   });
   const data = await res.json();
   if (!data.ok) {
-    console.error('[webhook] forwardMessage failed:', data.description);
+    console.error('[webhook] copyMessage failed:', data.description);
     return null;
   }
   return data.result.message_id as number;
@@ -54,7 +67,15 @@ async function ingestDocument(
   const isEpub = doc.mime_type === 'application/epub+zip';
   if (!isPdf && !isEpub) return { created: false, title: '' };
 
-  const existing = await db.findOne<db.Book>('books', (b) => b.telegram_file_id === doc.file_id);
+  // Dedup by file_unique_id — stable across the DM original and the
+  // storage-channel copy, so the copy's channel_post update won't create a
+  // duplicate book. Fall back to file_id for older records.
+  const existing = await db.findOne<db.Book>(
+    'books',
+    (b) =>
+      (!!doc.file_unique_id && b.telegram_file_unique_id === doc.file_unique_id) ||
+      b.telegram_file_id === doc.file_id,
+  );
   if (existing) return { created: false, title: existing.title };
 
   const rawName = doc.file_name || 'Unknown Book';
@@ -79,6 +100,7 @@ async function ingestDocument(
     download_count: 0,
     view_count: 0,
     telegram_file_id: doc.file_id,
+    telegram_file_unique_id: doc.file_unique_id || undefined,
     // Always points to the storage channel — MTProto can reliably access it there
     telegram_message_id: storageMessageId,
     telegram_source_chat_id: storageMessageId ? String(STORAGE_CHANNEL_ID) : undefined,
@@ -108,7 +130,21 @@ async function handleDocumentMessage(message: any) {
 
   const chatId = message.chat.id;
 
-  const existing = await db.findOne<db.Book>('books', (b) => b.telegram_file_id === doc.file_id);
+  // Optional admin-only upload gating (BeyondDrive restricts uploads to admins)
+  if (!isAdminUser(message.from?.id)) {
+    await sendMessage(
+      chatId,
+      `🚫 Only authorised admins can add books to QuantXBooks.\n\nYour Telegram ID is <code>${message.from?.id}</code>.`,
+    );
+    return true;
+  }
+
+  const existing = await db.findOne<db.Book>(
+    'books',
+    (b) =>
+      (!!doc.file_unique_id && b.telegram_file_unique_id === doc.file_unique_id) ||
+      b.telegram_file_id === doc.file_id,
+  );
   if (existing) {
     await sendMessage(chatId, `⚠️ Already in library: <b>${existing.title}</b>`);
     return true;
@@ -116,15 +152,31 @@ async function handleDocumentMessage(message: any) {
 
   await sendMessage(chatId, `⏳ Adding to library...`);
 
-  // Forward to the storage channel so MTProto always finds the file in one place
-  const storageMessageId = await forwardToStorageChannel(message.chat.id, message.message_id);
+  // Copy into the storage channel so MTProto always finds the file in one place.
+  const storageMessageId = await copyToStorageChannel(message.chat.id, message.message_id);
 
   const { created, title } = await ingestDocument(doc, storageMessageId ?? undefined);
 
-  if (created) {
-    await sendMessage(chatId, `✅ Added: <b>${title}</b>\n\nEdit title/author/category at /admin/books`);
+  if (!created) {
+    // Type was already validated above, so this means the book already exists
+    // (e.g. the storage-channel copy's channel_post ingested it first).
+    await sendMessage(chatId, `✅ Already in library: <b>${title}</b>`);
+    return true;
+  }
+
+  if (storageMessageId == null) {
+    // Copy failed — Bot API can still stream files ≤ 20 MB, but larger files
+    // need the storage-channel copy for MTProto. Warn so the admin can retry.
+    await sendMessage(
+      chatId,
+      `⚠️ Added: <b>${title}</b>\n\nBut I couldn't copy it to the storage channel — files over 20 MB may not open. ` +
+        `Check that the bot is an admin of the storage channel, then re-send the file.`,
+    );
   } else {
-    await sendMessage(chatId, `❌ Could not add — file type not supported.`);
+    await sendMessage(
+      chatId,
+      `✅ Added: <b>${title}</b>\n\nEdit title/author/category at /admin/books`,
+    );
   }
   return true;
 }

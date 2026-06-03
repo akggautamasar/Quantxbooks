@@ -40,6 +40,7 @@ export interface Book {
   download_count: number;
   view_count: number;
   telegram_file_id?: string;
+  telegram_file_unique_id?: string; // stable across DM original + storage-channel copy; used for dedup
   telegram_message_id?: number;
   telegram_source_chat_id?: string; // chat where the file actually lives (DM or storage channel)
   created_at: string;
