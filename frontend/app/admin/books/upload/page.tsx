@@ -84,7 +84,8 @@ function FileUploadZone({ label, accept, type, bookTitle, onUploaded, currentFil
             const coverForm = new FormData();
             coverForm.append(
               'file',
-              new File([coverBlob], coverName, { type: 'image/jpeg' }),
+              coverBlob as Blob,
+              coverName,
             );
             coverForm.append('type', 'cover');
             coverForm.append('title', bookTitle || 'Unknown Book');
