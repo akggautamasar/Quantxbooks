@@ -7,7 +7,7 @@ const nextConfig = {
     ],
   },
   experimental: {
-    serverComponentsExternalPackages: ['canvas', 'pdfjs-dist', 'telegram'],
+    serverComponentsExternalPackages: ['canvas', 'pdfjs-dist'],
   },
   webpack: (config) => {
     config.resolve.alias.canvas = false;

@@ -2,11 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import * as db from '@/lib/tg-db';
 import { fetchFile } from '@/lib/tg-storage';
 import { verifyToken, getTokenFromHeader } from '@/lib/auth';
-import { downloadByMessageId, isAvailable as isMTProtoAvailable } from '@/lib/tg-mtproto';
 import { viewCounts } from '@/lib/view-counts';
 
 export const runtime = 'nodejs';
-export const maxDuration = 60;
+export const maxDuration = 30;
 
 export async function GET(
   request: NextRequest,
@@ -18,17 +17,16 @@ export async function GET(
       return NextResponse.json({ success: false, error: 'Book not found' }, { status: 404 });
     }
 
-    // Check auth — fall back to cookie so iframe requests work
+    // Auth — fall back to cookie so iframe requests work
     const token =
       getTokenFromHeader(request.headers.get('authorization')) ||
       request.cookies.get('token')?.value ||
       null;
     let isPremium = false;
-    let isAdmin = false;
     if (token) {
       const decoded = verifyToken(token);
       if (decoded) {
-        isAdmin = decoded.role === 'admin';
+        const isAdmin = decoded.role === 'admin';
         const user = await db.getById<db.User>('users', decoded.userId);
         isPremium =
           isAdmin ||
@@ -37,21 +35,31 @@ export async function GET(
       }
     }
 
-    const needsPremium = book.is_premium && !isPremium;
-    if (needsPremium) {
+    if (book.is_premium && !isPremium) {
       return NextResponse.json(
         { success: false, error: 'Premium subscription required', code: 'PREMIUM_REQUIRED' },
         { status: 403 }
       );
     }
 
+    // Books uploaded via admin panel or auto-converted are served as page images
+    // through /api/books/[id]/cover?page=N — this route is only a fallback for
+    // legacy channel-uploaded books that still have a pdf_url.
     const fileId = book.pdf_url || book.telegram_file_id;
-    if (!fileId && !book.telegram_message_id) {
-      return NextResponse.json({ success: false, error: 'No readable file available' }, { status: 404 });
+    if (!fileId) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            'This book has no streamable file. If the cover shows pages, try reloading — it may still be processing.',
+        },
+        { status: 404 }
+      );
     }
 
-    const safeTitle = book.title.replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_') || 'book';
+    viewCounts.set(book.id, (viewCounts.get(book.id) ?? (book.view_count || 0)) + 1);
 
+    const safeTitle = book.title.replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_') || 'book';
     const buildHeaders = (contentLength?: string | null): Record<string, string> => {
       const h: Record<string, string> = {
         'Content-Type': 'application/pdf',
@@ -63,78 +71,37 @@ export async function GET(
       return h;
     };
 
-    // Note: view_count updates removed — each update triggers a full Telegram DB write.
-    // In a multi-instance serverless environment, concurrent view_count writes from
-    // different lambda instances overwrite each other's DB snapshots, causing books
-    // to disappear. Counts are tracked in-memory per instance only.
-    viewCounts.set(book.id, (viewCounts.get(book.id) ?? (book.view_count || 0)) + 1);
-
-    // Try Bot API first (works for files ≤ 20 MB)
-    if (fileId) {
-      try {
-        const tgResponse = await fetchFile(fileId);
-        if (tgResponse.ok) {
-          return new NextResponse(tgResponse.body, {
-            status: 200,
-            headers: buildHeaders(tgResponse.headers.get('content-length')),
-          });
-        }
-      } catch (err: any) {
-        const msg: string = err?.message || '';
-        if (!(msg.includes('file is too big') || msg.includes('too big'))) {
-          throw err;
-        }
-        // Fall through to MTProto for large files
+    try {
+      const tgResponse = await fetchFile(fileId);
+      if (tgResponse.ok) {
+        return new NextResponse(tgResponse.body, {
+          status: 200,
+          headers: buildHeaders(tgResponse.headers.get('content-length')),
+        });
       }
-    }
-
-    // MTProto fallback for files > 20 MB
-    if (book.telegram_message_id) {
-      if (!isMTProtoAvailable()) {
+    } catch (err: any) {
+      const msg: string = err?.message || '';
+      if (msg.includes('file is too big') || msg.includes('too big')) {
         return NextResponse.json(
           {
             success: false,
             error:
-              'This PDF is larger than 20 MB. MTProto streaming is not configured on this server — the admin needs to set TELEGRAM_API_ID and TELEGRAM_API_HASH.',
+              'This file is too large to stream. Please ask the admin to re-upload it via Admin → Upload so it is stored as page images.',
           },
           { status: 413 }
         );
       }
-      try {
-        const buffer = await downloadByMessageId(book.telegram_message_id);
-        return new NextResponse(new Uint8Array(buffer), {
-          status: 200,
-          headers: buildHeaders(buffer.byteLength.toString()),
-        });
-      } catch (mtErr: any) {
-        if (mtErr?.message?.startsWith('FILE_TOO_LARGE:')) {
-          const bytes = parseInt(mtErr.message.split(':')[1] || '0', 10);
-          const mb = (bytes / (1024 * 1024)).toFixed(0);
-          return NextResponse.json(
-            {
-              success: false,
-              error: `This PDF is ${mb} MB — too large to stream on this server. The admin needs to host it externally or split it into smaller parts.`,
-            },
-            { status: 413 }
-          );
-        }
-        throw mtErr;
-      }
+      throw err;
     }
 
     return NextResponse.json(
-      {
-        success: false,
-        error:
-          "This PDF exceeds Telegram's 20 MB streaming limit. The admin needs to re-upload it so the message ID is stored for MTProto streaming.",
-      },
-      { status: 413 }
+      { success: false, error: 'Failed to fetch file from Telegram' },
+      { status: 502 }
     );
   } catch (err: any) {
     console.error('Read error:', err);
     const msg = err?.message || '';
-    // Surface DB-unavailable errors distinctly from "book doesn't exist"
-    if (msg.includes('getChat') || msg.includes('getFile') || msg.includes('description')) {
+    if (msg.includes('getChat') || msg.includes('getFile')) {
       return NextResponse.json(
         { success: false, error: 'Database temporarily unavailable — please retry in a moment' },
         { status: 503 }
