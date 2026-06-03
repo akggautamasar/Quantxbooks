@@ -58,16 +58,18 @@ export async function GET(
       return NextResponse.json({ success: false, error: 'Failed to fetch book file' }, { status: 502 });
     }
 
-    const contentType = tgResponse.headers.get('content-type') || 'application/pdf';
+    // Always force application/pdf — Telegram returns application/octet-stream
+    // which causes browsers to download instead of display inline.
     const contentLength = tgResponse.headers.get('content-length');
+    const safeTitle = book.title.replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_') || 'book';
 
     // Update read count (non-blocking)
     db.update<db.Book>('books', book.id, { view_count: book.view_count + 1 } as any).catch(() => {});
 
     const headers: Record<string, string> = {
-      'Content-Type': contentType,
-      'Content-Disposition': `inline; filename="${encodeURIComponent(book.title)}.pdf"`,
-      'Cache-Control': 'private, no-store',
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename="${safeTitle}.pdf"`,
+      'Cache-Control': 'private, max-age=3600',
       'X-Content-Type-Options': 'nosniff',
     };
     if (contentLength) headers['Content-Length'] = contentLength;

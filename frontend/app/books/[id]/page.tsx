@@ -5,8 +5,8 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { useParams, useRouter } from 'next/navigation';
 import {
-  BookOpen, Crown, Download, Eye, ArrowLeft, Globe, Tag,
-  Lock, Play, Bookmark, Share2, Star, Clock
+  BookOpen, Crown, Eye, ArrowLeft, Globe, Tag,
+  Lock, Play, Star, Clock
 } from 'lucide-react';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
@@ -62,20 +62,6 @@ export default function BookDetailPage() {
       return;
     }
     setShowReader(true);
-  };
-
-  const handleDownload = () => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      router.push('/login');
-      return;
-    }
-    if (!isPremiumUser) {
-      toast('Premium subscription required to download', { icon: '👑' });
-      router.push('/pricing');
-      return;
-    }
-    window.open(`/api/books/${book!.id}/download`, '_blank');
   };
 
   if (loading) return <PageLoader />;
@@ -137,15 +123,6 @@ export default function BookDetailPage() {
                   )}
                 </button>
 
-                {isPremiumUser && (
-                  <button
-                    onClick={handleDownload}
-                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border border-white/10 text-gray-300 hover:border-primary-500 font-semibold text-sm transition-all"
-                  >
-                    <Download className="w-4 h-4" /> Download
-                  </button>
-                )}
-
                 {!isPremiumUser && book.is_premium && (
                   <Link
                     href="/pricing"
@@ -162,11 +139,6 @@ export default function BookDetailPage() {
                   <Eye className="w-4 h-4 text-gray-400 mx-auto mb-1" />
                   <div className="text-white font-semibold text-sm">{book.view_count}</div>
                   <div className="text-gray-500 text-xs">Views</div>
-                </div>
-                <div className="glass rounded-xl p-3 text-center">
-                  <Download className="w-4 h-4 text-gray-400 mx-auto mb-1" />
-                  <div className="text-white font-semibold text-sm">{book.download_count}</div>
-                  <div className="text-gray-500 text-xs">Downloads</div>
                 </div>
                 {book.total_pages && (
                   <div className="glass rounded-xl p-3 text-center">
@@ -268,30 +240,36 @@ export default function BookDetailPage() {
           </div>
         </div>
 
-        {/* PDF/EPUB Reader Modal */}
+        {/* PDF Reader Modal */}
         {showReader && book && (
-          <div className="fixed inset-0 bg-black/90 z-50 flex flex-col">
-            <div className="flex items-center justify-between p-4 bg-dark-800 border-b border-white/10">
-              <div>
-                <h2 className="font-semibold text-white">{book.title}</h2>
+          <div className="fixed inset-0 bg-black z-50 flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 bg-dark-800 border-b border-white/10 flex-shrink-0">
+              <div className="min-w-0 mr-4">
+                <h2 className="font-semibold text-white text-sm truncate">{book.title}</h2>
                 <p className="text-gray-400 text-xs">{book.author}</p>
               </div>
-              <button onClick={() => setShowReader(false)} className="text-gray-400 hover:text-white transition-colors px-4 py-2 bg-dark-700 rounded-lg text-sm">
-                Close Reader
+              <button
+                onClick={() => setShowReader(false)}
+                className="flex-shrink-0 text-gray-400 hover:text-white transition-colors px-4 py-2 bg-dark-700 hover:bg-dark-600 rounded-lg text-sm"
+              >
+                ✕ Close
               </button>
             </div>
-            <div className="flex-1 overflow-auto p-4">
+            <div className="flex-1 overflow-hidden">
               {book.pdf_url || book.epub_url ? (
                 <iframe
-                  src={`/api/books/${book.id}/read`}
-                  className="w-full h-full min-h-screen rounded-lg"
+                  src={`/api/books/${book.id}/read#toolbar=0&navpanes=0&scrollbar=0`}
+                  className="w-full h-full border-0"
                   title={book.title}
+                  allowFullScreen
                 />
               ) : book.preview_pages && book.preview_pages.length > 0 ? (
-                <div className="max-w-3xl mx-auto space-y-4">
-                  {book.preview_pages.map((pageUrl, i) => (
-                    <Image key={i} src={pageUrl} alt={`Page ${i + 1}`} width={800} height={1200} className="w-full rounded-lg shadow-lg" />
-                  ))}
+                <div className="h-full overflow-y-auto p-4">
+                  <div className="max-w-3xl mx-auto space-y-4">
+                    {book.preview_pages.map((pageUrl, i) => (
+                      <Image key={i} src={pageUrl} alt={`Page ${i + 1}`} width={800} height={1200} className="w-full rounded-lg shadow-lg" />
+                    ))}
+                  </div>
                 </div>
               ) : (
                 <div className="flex items-center justify-center h-full">
