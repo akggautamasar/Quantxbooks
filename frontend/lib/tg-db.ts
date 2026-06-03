@@ -139,9 +139,11 @@ async function tgPost(method: string, body: Record<string, any>) {
 
 // ─── Database I/O ─────────────────────────────────────────────────────────────
 
-async function loadDb(): Promise<TGDatabase> {
-  // Return cache if fresh
-  if (_cache && Date.now() - _cacheTs < CACHE_TTL) return _cache;
+async function loadDb(forceFresh = false): Promise<TGDatabase> {
+  // Return cache if fresh — unless the caller demands the canonical copy from
+  // Telegram. Writes always force a fresh load so concurrent serverless
+  // instances can't overwrite each other's recently-added records.
+  if (!forceFresh && _cache && Date.now() - _cacheTs < CACHE_TTL) return _cache;
 
   try {
     // Get the pinned message from the DB chat
@@ -225,7 +227,10 @@ async function write(fn: (db: TGDatabase) => void | TGDatabase): Promise<void> {
   _writeQueue = _writeQueue
     .catch(() => {}) // previous failure must not block future writes
     .then(async () => {
-      const snapshot = await loadDb();
+      // Force a fresh load from Telegram before mutating. Without this, an
+      // instance holding a 20s-stale cache would save its outdated snapshot and
+      // wipe books that other instances added in the meantime.
+      const snapshot = await loadDb(true);
       // Deep-clone so fn() never mutates _cache before a successful save.
       // Without this, a failed saveDb leaves the cache ahead of Telegram,
       // causing books to appear on the site but not be found on read.
@@ -247,9 +252,16 @@ export async function getById<T extends { id: string }>(
   collection: CollectionKey,
   id: string
 ): Promise<T | null> {
-  const db = await loadDb();
-  const arr = db[collection] as unknown as T[];
-  return arr.find((item) => item.id === id) ?? null;
+  let db = await loadDb();
+  let found = (db[collection] as unknown as T[]).find((item) => item.id === id);
+  if (!found) {
+    // A miss may just mean this instance's cache predates a recent ingestion.
+    // Force one fresh load from Telegram before declaring the record absent —
+    // this is what fixes "Book not found" right after a new upload appears.
+    db = await loadDb(true);
+    found = (db[collection] as unknown as T[]).find((item) => item.id === id);
+  }
+  return found ?? null;
 }
 
 export async function findOne<T>(
