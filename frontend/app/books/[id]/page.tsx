@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useParams, useRouter } from 'next/navigation';
@@ -15,6 +16,8 @@ import { Book } from '@/lib/types';
 import { formatDate, truncateText } from '@/lib/utils';
 import toast from 'react-hot-toast';
 import { cn } from '@/lib/utils';
+
+const PDFReader = dynamic(() => import('@/components/PDFReader'), { ssr: false });
 
 export default function BookDetailPage() {
   const params = useParams();
@@ -242,42 +245,12 @@ export default function BookDetailPage() {
 
         {/* PDF Reader Modal */}
         {showReader && book && (
-          <div className="fixed inset-0 bg-black z-50 flex flex-col">
-            <div className="flex items-center justify-between px-4 py-3 bg-dark-800 border-b border-white/10 flex-shrink-0">
-              <div className="min-w-0 mr-4">
-                <h2 className="font-semibold text-white text-sm truncate">{book.title}</h2>
-                <p className="text-gray-400 text-xs">{book.author}</p>
-              </div>
-              <button
-                onClick={() => setShowReader(false)}
-                className="flex-shrink-0 text-gray-400 hover:text-white transition-colors px-4 py-2 bg-dark-700 hover:bg-dark-600 rounded-lg text-sm"
-              >
-                ✕ Close
-              </button>
-            </div>
-            <div className="flex-1 overflow-hidden">
-              {book.pdf_url || book.epub_url ? (
-                <iframe
-                  src={`/api/books/${book.id}/read#toolbar=0&navpanes=0&scrollbar=0`}
-                  className="w-full h-full border-0"
-                  title={book.title}
-                  allowFullScreen
-                />
-              ) : book.preview_pages && book.preview_pages.length > 0 ? (
-                <div className="h-full overflow-y-auto p-4">
-                  <div className="max-w-3xl mx-auto space-y-4">
-                    {book.preview_pages.map((pageUrl, i) => (
-                      <Image key={i} src={pageUrl} alt={`Page ${i + 1}`} width={800} height={1200} className="w-full rounded-lg shadow-lg" />
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-center justify-center h-full">
-                  <p className="text-gray-400">No readable content available</p>
-                </div>
-              )}
-            </div>
-          </div>
+          <PDFReader
+            bookId={book.id as string}
+            title={book.title}
+            author={book.author}
+            onClose={() => setShowReader(false)}
+          />
         )}
       </main>
       <Footer />
