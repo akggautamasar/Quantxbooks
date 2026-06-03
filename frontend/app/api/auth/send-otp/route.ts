@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import * as db from '@/lib/tg-db';
+
+export const runtime = 'nodejs';
 import { generateOTP, isValidMobile } from '@/lib/utils';
 import { OTP_EXPIRY_MINUTES } from '@/lib/constants';
 
@@ -65,8 +67,11 @@ export async function POST(request: NextRequest) {
       message: otpSent ? 'OTP sent via Telegram' : 'OTP generated (configure Telegram to receive it)',
       ...(isDev && { otp }),
     });
-  } catch (err) {
+  } catch (err: any) {
     console.error('Send OTP error:', err);
-    return NextResponse.json({ success: false, error: 'Failed to send OTP' }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: err?.message || 'Failed to send OTP' },
+      { status: 500 }
+    );
   }
 }

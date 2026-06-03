@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { uploadFile, uploadThumbnailAsPhoto, formatFileSize, FileType } from '@/lib/tg-storage';
+import { uploadFile, formatFileSize, FileType } from '@/lib/tg-storage';
 import { verifyToken, getTokenFromHeader } from '@/lib/auth';
 
 export const runtime = 'nodejs';
@@ -43,19 +43,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const storageChannel = process.env.TELEGRAM_STORAGE_CHANNEL_ID;
+    if (!storageChannel) {
+      return NextResponse.json(
+        { success: false, error: 'TELEGRAM_STORAGE_CHANNEL_ID is not configured on the server' },
+        { status: 500 }
+      );
+    }
+
     const blob = new Blob([await file.arrayBuffer()], { type: file.type });
     const result = await uploadFile(blob, file.name, fileType, `📚 ${bookTitle} [${fileType.toUpperCase()}]`);
-
-    // For PDFs and EPUBs, Telegram auto-generates a thumbnail from the first page.
-    // Download it and re-upload as a cover photo automatically.
-    let autoCover: { file_id: string; file_name: string } | null = null;
-    if ((fileType === 'pdf' || fileType === 'epub') && result.thumbnail_file_id) {
-      const baseName = file.name.replace(/\.(pdf|epub)$/i, '');
-      const coverResult = await uploadThumbnailAsPhoto(result.thumbnail_file_id, baseName);
-      if (coverResult) {
-        autoCover = { file_id: coverResult.file_id, file_name: coverResult.file_name };
-      }
-    }
 
     return NextResponse.json({
       success: true,
@@ -65,7 +62,7 @@ export async function POST(request: NextRequest) {
         file_name: result.file_name,
         file_size: formatFileSize(result.file_size),
         message_id: result.message_id,
-        auto_cover: autoCover, // populated when Telegram generated a first-page thumbnail
+        auto_cover: null, // cover is extracted client-side from the PDF first page
       },
     });
   } catch (err: any) {

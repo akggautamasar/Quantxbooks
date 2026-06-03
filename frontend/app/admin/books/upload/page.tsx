@@ -3,12 +3,41 @@
 import { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Upload, BookOpen, Link as LinkIcon, Image as ImageIcon,
-  FileText, Tag, CloudUpload, CheckCircle, AlertCircle, X, File
+  Upload, BookOpen, CloudUpload, CheckCircle, AlertCircle, X, File, Tag,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { BOOK_CATEGORIES, LANGUAGES } from '@/lib/constants';
 import { cn } from '@/lib/utils';
+
+// Render the first page of a PDF to a JPEG blob (browser-side, no server round-trip)
+async function extractPdfFirstPage(file: File): Promise<Blob | null> {
+  try {
+    const pdfjs = await import('pdfjs-dist');
+    if (!pdfjs.GlobalWorkerOptions.workerSrc) {
+      pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+        'pdfjs-dist/build/pdf.worker.min.js',
+        import.meta.url,
+      ).toString();
+    }
+    const buf = await file.arrayBuffer();
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(buf) }).promise;
+    const page = await doc.getPage(1);
+    const nat = page.getViewport({ scale: 1 });
+    // Target ~600 px wide; never upscale beyond 2×
+    const scale = Math.min(2, 600 / nat.width);
+    const vp = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.floor(vp.width);
+    canvas.height = Math.floor(vp.height);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+  } catch (e) {
+    console.error('[cover] PDF render failed:', e);
+    return null;
+  }
+}
 
 interface UploadedFile {
   file_id: string;
@@ -39,16 +68,51 @@ function FileUploadZone({ label, accept, type, bookTitle, onUploaded, currentFil
   const handleFile = async (file: File) => {
     if (!file) return;
     setState('uploading');
-    setProgress(10);
+    setProgress(5);
 
     try {
       const token = localStorage.getItem('token');
+
+      // For PDFs: render first page → upload as cover image before uploading the PDF
+      let autoExtractedCover: UploadedFile['auto_cover'] = null;
+      if (type === 'pdf') {
+        try {
+          const coverBlob = await extractPdfFirstPage(file);
+          if (coverBlob) {
+            setProgress(20);
+            const coverName = file.name.replace(/\.pdf$/i, '') + '-cover.jpg';
+            const coverForm = new FormData();
+            coverForm.append(
+              'file',
+              new File([coverBlob], coverName, { type: 'image/jpeg' }),
+            );
+            coverForm.append('type', 'cover');
+            coverForm.append('title', bookTitle || 'Unknown Book');
+
+            const coverRes = await fetch('/api/admin/upload', {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${token}` },
+              body: coverForm,
+            });
+            const coverData = await coverRes.json();
+            if (coverData.success) {
+              autoExtractedCover = {
+                file_id: coverData.data.file_id,
+                file_name: coverName,
+              };
+            }
+          }
+        } catch {
+          // Cover extraction is best-effort — continue without it
+        }
+      }
+
+      setProgress(40);
       const form = new FormData();
       form.append('file', file);
       form.append('type', type);
       form.append('title', bookTitle || 'Unknown Book');
 
-      setProgress(40);
       const res = await fetch('/api/admin/upload', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
@@ -58,8 +122,9 @@ function FileUploadZone({ label, accept, type, bookTitle, onUploaded, currentFil
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
 
-      setUploaded(data.data);
-      onUploaded(data.data);
+      const result: UploadedFile = { ...data.data, auto_cover: autoExtractedCover };
+      setUploaded(result);
+      onUploaded(result);
       setState('done');
       setProgress(100);
       toast.success(`${label} uploaded to Telegram storage!`);
@@ -198,11 +263,11 @@ export default function UploadBookPage() {
     if (field === 'pdf_url' && result.message_id) {
       setForm((prev) => ({ ...prev, pdf_message_id: result.message_id }));
     }
-    // When PDF is uploaded: if Telegram generated a first-page thumbnail, use it as cover
+    // When PDF is uploaded with a client-rendered cover, auto-fill cover_url
     if ((field === 'pdf_url' || field === 'epub_url') && result.auto_cover && !form.cover_url) {
       setForm((prev) => ({ ...prev, cover_url: result.auto_cover!.file_id }));
       setAutoCoverSet(true);
-      toast.success('Cover auto-extracted from PDF first page!');
+      toast.success('Cover extracted from PDF first page!');
     }
   };
 
