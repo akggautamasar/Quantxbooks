@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { BookOpen, Edit, Trash2, Plus, Crown, Eye, Download, Search } from 'lucide-react';
+import { BookOpen, Edit, Trash2, Plus, Crown, Eye, Download, Search, RefreshCw, ImageIcon } from 'lucide-react';
 import { Book } from '@/lib/types';
 import { truncateText } from '@/lib/utils';
 import toast from 'react-hot-toast';
@@ -12,6 +12,7 @@ export default function AdminBooksPage() {
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [converting, setConverting] = useState(false);
 
   useEffect(() => {
     fetchBooks();
@@ -50,6 +51,33 @@ export default function AdminBooksPage() {
     }
   };
 
+  const handleConvertPending = async () => {
+    const pending = books.filter((b) => (!b.preview_pages || b.preview_pages.length === 0) && (b.pdf_url || b.telegram_file_id));
+    if (pending.length === 0) { toast('All books already have page images', { icon: '✅' }); return; }
+    setConverting(true);
+    const t = toast.loading(`Converting ${pending.length} book(s) to page images…`);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/admin/convert-books', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      toast.dismiss(t);
+      if (data.ok) {
+        toast.success(`Converted ${data.processed} book(s)${data.failed ? `, ${data.failed} failed` : ''}`);
+        fetchBooks();
+      } else {
+        toast.error(data.error || 'Conversion failed');
+      }
+    } catch {
+      toast.dismiss(t);
+      toast.error('Request failed');
+    } finally {
+      setConverting(false);
+    }
+  };
+
   const filtered = books.filter((b) =>
     search ? b.title.toLowerCase().includes(search.toLowerCase()) || b.author.toLowerCase().includes(search.toLowerCase()) : true
   );
@@ -61,12 +89,23 @@ export default function AdminBooksPage() {
           <h1 className="text-2xl font-bold text-white">Books</h1>
           <p className="text-gray-400 text-sm">{books.length} books in library</p>
         </div>
-        <Link
-          href="/admin/books/upload"
-          className="flex items-center gap-2 bg-primary-600 hover:bg-primary-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition-all"
-        >
-          <Plus className="w-4 h-4" /> Add Book
-        </Link>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleConvertPending}
+            disabled={converting}
+            className="flex items-center gap-2 bg-dark-700 hover:bg-dark-600 border border-white/10 text-gray-300 px-4 py-2 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
+            title="Convert books without page images"
+          >
+            {converting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ImageIcon className="w-4 h-4" />}
+            Convert Pending
+          </button>
+          <Link
+            href="/admin/books/upload"
+            className="flex items-center gap-2 bg-primary-600 hover:bg-primary-500 text-white px-4 py-2 rounded-xl text-sm font-medium transition-all"
+          >
+            <Plus className="w-4 h-4" /> Add Book
+          </Link>
+        </div>
       </div>
 
       <div className="mb-4 relative">
@@ -111,6 +150,9 @@ export default function AdminBooksPage() {
                   <h3 className="font-medium text-white truncate">{book.title}</h3>
                   {book.is_premium && <Crown className="w-3 h-3 text-gold-400 flex-shrink-0" />}
                   {book.is_featured && <span className="text-xs bg-primary-900/50 text-primary-300 px-2 py-0.5 rounded-full">Featured</span>}
+                  {(!book.preview_pages || book.preview_pages.length === 0) && (book.pdf_url || (book as any).telegram_file_id) && (
+                    <span className="text-xs bg-yellow-900/40 text-yellow-400 px-2 py-0.5 rounded-full border border-yellow-500/20">No images</span>
+                  )}
                 </div>
                 <p className="text-gray-400 text-xs mt-0.5">{book.author} • {book.category} • {book.language}</p>
                 <div className="flex items-center gap-4 mt-1">
