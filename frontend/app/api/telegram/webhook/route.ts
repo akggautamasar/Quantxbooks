@@ -5,27 +5,50 @@ import { formatFileSize } from '@/lib/tg-storage';
 export const runtime = 'nodejs';
 export const maxDuration = 30;
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const STORAGE_CHANNEL_ID = process.env.TELEGRAM_STORAGE_CHANNEL_ID;
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
+const STORAGE_CHANNEL_ID = process.env.TELEGRAM_STORAGE_CHANNEL_ID!;
+const TG_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 async function sendMessage(chatId: string | number, text: string, parseMode = 'HTML') {
-  if (!BOT_TOKEN) return;
-  await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+  await fetch(`${TG_API}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ chat_id: chatId, text, parse_mode: parseMode }),
   });
 }
 
-interface FileSource {
-  /** The chat/channel where this file message lives (used by MTProto to locate it). */
-  chatId: string | number;
-  messageId: number;
+/**
+ * Forward a DM message to the storage channel.
+ * Forwarding never re-uploads — Telegram just creates a pointer, so it works
+ * for files of any size (even > 20 MB). MTProto can then always look in the
+ * storage channel, which it can always resolve.
+ * Returns the storage-channel message_id, or null on failure.
+ */
+async function forwardToStorageChannel(
+  fromChatId: number,
+  messageId: number,
+): Promise<number | null> {
+  const res = await fetch(`${TG_API}/forwardMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from_chat_id: fromChatId,
+      chat_id: STORAGE_CHANNEL_ID,
+      message_id: messageId,
+      disable_notification: true,
+    }),
+  });
+  const data = await res.json();
+  if (!data.ok) {
+    console.error('[webhook] forwardMessage failed:', data.description);
+    return null;
+  }
+  return data.result.message_id as number;
 }
 
 async function ingestDocument(
   doc: any,
-  source?: FileSource,
+  storageMessageId?: number,
 ): Promise<{ created: boolean; title: string }> {
   const isPdf = doc.mime_type === 'application/pdf';
   const isEpub = doc.mime_type === 'application/epub+zip';
@@ -38,13 +61,12 @@ async function ingestDocument(
   const title = rawName.replace(/\.(pdf|epub)$/i, '').replace(/[-_]+/g, ' ').trim();
 
   const thumb = doc.thumbnail || doc.thumb;
-  const coverFileId = thumb?.file_id || '';
 
   await db.insert<db.Book>('books', {
     title,
     author: 'Unknown',
     description: '',
-    cover_url: coverFileId,
+    cover_url: thumb?.file_id || '',
     pdf_url: isPdf ? doc.file_id : '',
     epub_url: isEpub ? doc.file_id : '',
     category: 'Uncategorized',
@@ -57,9 +79,9 @@ async function ingestDocument(
     download_count: 0,
     view_count: 0,
     telegram_file_id: doc.file_id,
-    // Store exactly WHERE this file lives so MTProto can find it for large files
-    telegram_message_id: source?.messageId,
-    telegram_source_chat_id: source?.chatId != null ? String(source.chatId) : undefined,
+    // Always points to the storage channel — MTProto can reliably access it there
+    telegram_message_id: storageMessageId,
+    telegram_source_chat_id: storageMessageId ? String(STORAGE_CHANNEL_ID) : undefined,
     preview_pages: [],
     updated_at: new Date().toISOString(),
   } as any);
@@ -67,14 +89,15 @@ async function ingestDocument(
   return { created: true, title };
 }
 
+// Channel post: document uploaded directly to the storage channel
 async function handleChannelPost(post: any) {
   if (!post.document) return;
-  const chatId = String(post.chat?.id);
-  if (chatId !== String(STORAGE_CHANNEL_ID)) return;
-  // Source = storage channel; MTProto will look here for large files
-  await ingestDocument(post.document, { chatId, messageId: post.message_id });
+  if (String(post.chat?.id) !== String(STORAGE_CHANNEL_ID)) return;
+  // Already in the storage channel — message_id is ready to use
+  await ingestDocument(post.document, post.message_id);
 }
 
+// Bot DM: user forwarded / sent a PDF to the bot
 async function handleDocumentMessage(message: any) {
   const doc = message.document;
   if (!doc) return false;
@@ -84,6 +107,7 @@ async function handleDocumentMessage(message: any) {
   if (!isPdf && !isEpub) return false;
 
   const chatId = message.chat.id;
+
   const existing = await db.findOne<db.Book>('books', (b) => b.telegram_file_id === doc.file_id);
   if (existing) {
     await sendMessage(chatId, `⚠️ Already in library: <b>${existing.title}</b>`);
@@ -91,11 +115,12 @@ async function handleDocumentMessage(message: any) {
   }
 
   await sendMessage(chatId, `⏳ Adding to library...`);
-  // Source = this DM chat; MTProto will look here for large files
-  const { created, title } = await ingestDocument(doc, {
-    chatId: message.chat.id,
-    messageId: message.message_id,
-  });
+
+  // Forward to the storage channel so MTProto always finds the file in one place
+  const storageMessageId = await forwardToStorageChannel(message.chat.id, message.message_id);
+
+  const { created, title } = await ingestDocument(doc, storageMessageId ?? undefined);
+
   if (created) {
     await sendMessage(chatId, `✅ Added: <b>${title}</b>\n\nEdit title/author/category at /admin/books`);
   } else {
