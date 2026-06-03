@@ -249,6 +249,7 @@ export default function BookDetailPage() {
             bookId={book.id as string}
             title={book.title}
             author={book.author}
+            previewPages={book.preview_pages || []}
             onClose={() => setShowReader(false)}
           />
         )}

@@ -4,24 +4,30 @@ import { fetchFile } from '@/lib/tg-storage';
 
 export const runtime = 'nodejs';
 
-// Proxy cover images through the server (works even if stored as Telegram file_id)
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
+    const pageParam = new URL(request.url).searchParams.get('page');
     const book = await db.getById<db.Book>('books', params.id);
-    if (!book?.cover_url) {
-      return new NextResponse(null, { status: 404 });
+    if (!book) return new NextResponse(null, { status: 404 });
+
+    let fileId: string | undefined;
+
+    if (pageParam !== null) {
+      // Serve a specific page image from preview_pages
+      const idx = parseInt(pageParam, 10);
+      fileId = book.preview_pages?.[idx];
+    } else {
+      fileId = book.cover_url || undefined;
     }
 
-    // If cover_url looks like an external URL, redirect to it
-    if (book.cover_url.startsWith('http')) {
-      return NextResponse.redirect(book.cover_url);
-    }
+    if (!fileId) return new NextResponse(null, { status: 404 });
 
-    // Otherwise treat it as a Telegram file_id and proxy
-    const tgResponse = await fetchFile(book.cover_url);
+    if (fileId.startsWith('http')) return NextResponse.redirect(fileId);
+
+    const tgResponse = await fetchFile(fileId);
     if (!tgResponse.ok) return new NextResponse(null, { status: 404 });
 
     return new NextResponse(tgResponse.body, {
@@ -34,3 +40,4 @@ export async function GET(
     return new NextResponse(null, { status: 500 });
   }
 }
+

@@ -4,8 +4,6 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2, BookOpen, RefreshCw } from 'lucide-react';
 
-// pdfjs-dist 3.11.174 ships a plain CommonJS worker (.js) — no ES module issues.
-// Must match the pdfjs-dist version react-pdf uses internally (3.11.174).
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.js',
   import.meta.url,
@@ -16,22 +14,33 @@ interface PDFReaderProps {
   title: string;
   author: string;
   onClose: () => void;
+  /** When set and non-empty the reader shows page images instead of streaming the PDF. */
+  previewPages?: string[];
 }
 
-export default function PDFReader({ bookId, title, author, onClose }: PDFReaderProps) {
-  const [numPages, setNumPages] = useState(0);
+export default function PDFReader({ bookId, title, author, onClose, previewPages = [] }: PDFReaderProps) {
+  const imageMode = previewPages.length > 0;
+
+  const [numPages, setNumPages] = useState(imageMode ? previewPages.length : 0);
   const [page, setPage] = useState(1);
   const [scale, setScale] = useState(1.0);
+
+  // PDF-mode state
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
-  const [fetching, setFetching] = useState(true);
+  const [fetching, setFetching] = useState(!imageMode);
+
+  // Image-mode state
+  const [imgLoading, setImgLoading] = useState(imageMode);
+  const [imgError, setImgError] = useState(false);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const [pageWidth, setPageWidth] = useState(400);
-
   const touchStartX = useRef(0);
 
-  // Fetch the PDF as a blob so we own the response and can inspect errors
+  // ── PDF mode: fetch the full blob ──────────────────────────────────────────
   const loadPdf = useCallback(() => {
+    if (imageMode) return;
     setFetching(true);
     setErrorMsg(null);
     setBlobUrl(null);
@@ -46,16 +55,12 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
       .then(async (res) => {
         if (!res.ok) {
           const raw = await res.text().catch(() => '');
-          let msg: string;
-          try {
-            msg = JSON.parse(raw).error || '';
-          } catch {
-            msg = '';
-          }
+          let msg = '';
+          try { msg = JSON.parse(raw).error || ''; } catch { /* */ }
           if (!msg) {
             if (res.status === 504 || res.status === 408) msg = 'The file took too long to load. Please retry — large books may take a moment.';
             else if (res.status === 503) msg = 'Database temporarily unavailable. Please retry in a moment.';
-            else if (res.status === 413) msg = `This book is too large to stream. ${msg || ''}`.trim();
+            else if (res.status === 413) msg = 'This book is too large to stream. Contact the admin.';
             else if (res.status === 403) msg = 'Premium subscription required to read this book.';
             else msg = `Error ${res.status} — please retry.`;
           }
@@ -63,23 +68,21 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
         }
         return res.blob();
       })
-      .then((blob) => {
-        setBlobUrl(URL.createObjectURL(blob));
-      })
-      .catch((err: Error) => {
-        setErrorMsg(err.message || 'Failed to load');
-      })
+      .then((blob) => setBlobUrl(URL.createObjectURL(blob)))
+      .catch((err: Error) => setErrorMsg(err.message || 'Failed to load'))
       .finally(() => setFetching(false));
-  }, [bookId]);
+  }, [bookId, imageMode]);
 
   useEffect(() => {
-    loadPdf();
-    return () => {
-      // revoke any previous blob URL on unmount
-      setBlobUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
-    };
-  }, [loadPdf]);
+    if (!imageMode) {
+      loadPdf();
+      return () => {
+        setBlobUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+      };
+    }
+  }, [loadPdf, imageMode]);
 
+  // ── Container width ─────────────────────────────────────────────────────────
   useEffect(() => {
     const update = () => {
       if (containerRef.current) setPageWidth(containerRef.current.clientWidth - 8);
@@ -89,20 +92,23 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
     return () => window.removeEventListener('resize', update);
   }, []);
 
+  // ── Page navigation ─────────────────────────────────────────────────────────
   const prevPage = useCallback(() => setPage(p => Math.max(1, p - 1)), []);
   const nextPage = useCallback(() => setPage(p => Math.min(numPages, p + 1)), [numPages]);
 
-  const handleTouchStart = (e: React.TouchEvent) => {
-    touchStartX.current = e.touches[0].clientX;
-  };
+  const handleTouchStart = (e: React.TouchEvent) => { touchStartX.current = e.touches[0].clientX; };
   const handleTouchEnd = (e: React.TouchEvent) => {
     const diff = touchStartX.current - e.changedTouches[0].clientX;
-    if (Math.abs(diff) > 50) {
-      if (diff > 0) nextPage(); else prevPage();
-    }
+    if (Math.abs(diff) > 50) { if (diff > 0) nextPage(); else prevPage(); }
   };
 
+  // Reset image-load flags on page change
+  useEffect(() => {
+    if (imageMode) { setImgLoading(true); setImgError(false); }
+  }, [page, imageMode]);
+
   const scaledWidth = Math.min(pageWidth * scale, 1200);
+  const currentImgUrl = imageMode ? `/api/books/${bookId}/cover?page=${page - 1}` : null;
 
   return (
     <div
@@ -123,7 +129,7 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
         </button>
       </div>
 
-      {/* PDF canvas area */}
+      {/* Content */}
       <div
         ref={containerRef}
         className="flex-1 overflow-auto bg-gray-300 flex justify-center"
@@ -131,7 +137,46 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
         onTouchEnd={handleTouchEnd}
         style={{ WebkitUserSelect: 'none', userSelect: 'none' }}
       >
-        {fetching ? (
+        {imageMode ? (
+          <div className="py-4 px-1 w-full flex justify-center">
+            <div className="relative" style={{ width: scaledWidth }}>
+              {imgLoading && (
+                <div
+                  className="absolute inset-0 flex items-center justify-center bg-gray-200"
+                  style={{ minHeight: '70vh' }}
+                >
+                  <Loader2 className="w-8 h-8 text-primary-500 animate-spin" />
+                </div>
+              )}
+              {imgError ? (
+                <div
+                  className="flex flex-col items-center justify-center gap-4 text-gray-600 px-6"
+                  style={{ minHeight: '70vh' }}
+                >
+                  <BookOpen className="w-12 h-12 text-gray-400" />
+                  <p className="text-sm text-center">Failed to load this page</p>
+                  <button
+                    onClick={() => { setImgError(false); setImgLoading(true); }}
+                    className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg text-sm"
+                  >
+                    <RefreshCw className="w-4 h-4" /> Retry
+                  </button>
+                </div>
+              ) : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  key={currentImgUrl}
+                  src={currentImgUrl!}
+                  alt={`Page ${page}`}
+                  style={{ width: scaledWidth, display: imgLoading ? 'none' : 'block' }}
+                  className="shadow-xl"
+                  onLoad={() => setImgLoading(false)}
+                  onError={() => { setImgLoading(false); setImgError(true); }}
+                />
+              )}
+            </div>
+          </div>
+        ) : fetching ? (
           <div className="flex flex-col items-center justify-center h-full gap-3 text-gray-600">
             <Loader2 className="w-10 h-10 text-primary-500 animate-spin" />
             <p className="text-sm">Loading book…</p>
@@ -177,7 +222,7 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
         ) : null}
       </div>
 
-      {/* Bottom controls */}
+      {/* Controls */}
       {numPages > 0 && (
         <div className="flex-shrink-0 bg-dark-800 border-t border-white/10 px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-1">
@@ -201,21 +246,15 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
           </div>
 
           <div className="flex items-center gap-2">
-            <button
-              onClick={prevPage}
-              disabled={page <= 1}
-              className="p-2 text-gray-400 hover:text-white disabled:opacity-30 transition-colors rounded-lg"
-            >
+            <button onClick={prevPage} disabled={page <= 1}
+              className="p-2 text-gray-400 hover:text-white disabled:opacity-30 transition-colors rounded-lg">
               <ChevronLeft className="w-5 h-5" />
             </button>
             <span className="text-white text-sm tabular-nums select-none">
               {page} <span className="text-gray-500">/</span> {numPages}
             </span>
-            <button
-              onClick={nextPage}
-              disabled={page >= numPages}
-              className="p-2 text-gray-400 hover:text-white disabled:opacity-30 transition-colors rounded-lg"
-            >
+            <button onClick={nextPage} disabled={page >= numPages}
+              className="p-2 text-gray-400 hover:text-white disabled:opacity-30 transition-colors rounded-lg">
               <ChevronRight className="w-5 h-5" />
             </button>
           </div>
