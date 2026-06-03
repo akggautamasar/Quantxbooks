@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
-import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2, BookOpen } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Loader2, BookOpen, RefreshCw } from 'lucide-react';
 
 // Worker is copied to public/ at build time (see package.json build script)
 pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
@@ -18,14 +18,52 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
   const [numPages, setNumPages] = useState(0);
   const [page, setPage] = useState(1);
   const [scale, setScale] = useState(1.0);
-  const [docError, setDocError] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [fetching, setFetching] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
   const [pageWidth, setPageWidth] = useState(400);
-  // Read token synchronously so the first fetch includes auth (ssr:false guarantees window exists)
-  const [token] = useState<string | null>(() => localStorage.getItem('token'));
 
-  // Touch swipe tracking
   const touchStartX = useRef(0);
+
+  // Fetch the PDF as a blob so we own the response and can inspect errors
+  const loadPdf = useCallback(() => {
+    setFetching(true);
+    setErrorMsg(null);
+    setBlobUrl(null);
+    setNumPages(0);
+    setPage(1);
+
+    const token = localStorage.getItem('token');
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    fetch(`/api/books/${bookId}/read`, { headers })
+      .then(async (res) => {
+        if (!res.ok) {
+          const raw = await res.text().catch(() => '');
+          let msg = `HTTP ${res.status}`;
+          try { msg = JSON.parse(raw).error || msg; } catch {}
+          throw new Error(msg);
+        }
+        return res.blob();
+      })
+      .then((blob) => {
+        setBlobUrl(URL.createObjectURL(blob));
+      })
+      .catch((err: Error) => {
+        setErrorMsg(err.message || 'Failed to load');
+      })
+      .finally(() => setFetching(false));
+  }, [bookId]);
+
+  useEffect(() => {
+    loadPdf();
+    return () => {
+      // revoke any previous blob URL on unmount
+      setBlobUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+    };
+  }, [loadPdf]);
 
   useEffect(() => {
     const update = () => {
@@ -39,7 +77,6 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
   const prevPage = useCallback(() => setPage(p => Math.max(1, p - 1)), []);
   const nextPage = useCallback(() => setPage(p => Math.min(numPages, p + 1)), [numPages]);
 
-  // Swipe to change page on mobile
   const handleTouchStart = (e: React.TouchEvent) => {
     touchStartX.current = e.touches[0].clientX;
   };
@@ -50,9 +87,6 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
     }
   };
 
-  const pdfFile = token
-    ? { url: `/api/books/${bookId}/read`, httpHeaders: { Authorization: `Bearer ${token}` } }
-    : `/api/books/${bookId}/read`;
   const scaledWidth = Math.min(pageWidth * scale, 1200);
 
   return (
@@ -64,7 +98,7 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
       <div className="flex items-center justify-between px-4 py-3 bg-dark-800 border-b border-white/10 flex-shrink-0">
         <div className="min-w-0 mr-4">
           <p className="font-semibold text-white text-sm truncate">{title}</p>
-          <p className="text-gray-400 text-xs">{author}</p>
+          <p className="text-gray-400 text-xs">{author || 'Unknown'}</p>
         </div>
         <button
           onClick={onClose}
@@ -82,17 +116,28 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
         onTouchEnd={handleTouchEnd}
         style={{ WebkitUserSelect: 'none', userSelect: 'none' }}
       >
-        {docError ? (
-          <div className="flex flex-col items-center justify-center h-full gap-4 text-gray-600">
-            <BookOpen className="w-12 h-12 text-gray-400" />
-            <p className="text-center px-6">Could not load this book. Please try again later.</p>
+        {fetching ? (
+          <div className="flex flex-col items-center justify-center h-full gap-3 text-gray-600">
+            <Loader2 className="w-10 h-10 text-primary-500 animate-spin" />
+            <p className="text-sm">Loading book…</p>
           </div>
-        ) : (
+        ) : errorMsg ? (
+          <div className="flex flex-col items-center justify-center h-full gap-4 text-gray-600 px-6">
+            <BookOpen className="w-12 h-12 text-gray-400" />
+            <p className="text-center text-sm font-medium">{errorMsg}</p>
+            <button
+              onClick={loadPdf}
+              className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg text-sm hover:bg-primary-500 transition-colors"
+            >
+              <RefreshCw className="w-4 h-4" /> Retry
+            </button>
+          </div>
+        ) : blobUrl ? (
           <div className="py-4 px-1">
             <Document
-              file={pdfFile}
+              file={blobUrl}
               onLoadSuccess={({ numPages }) => setNumPages(numPages)}
-              onLoadError={() => setDocError(true)}
+              onLoadError={(err) => setErrorMsg(`PDF parse error: ${err.message}`)}
               loading={
                 <div className="flex items-center justify-center" style={{ width: scaledWidth, height: '70vh' }}>
                   <Loader2 className="w-8 h-8 text-primary-500 animate-spin" />
@@ -114,13 +159,12 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
               />
             </Document>
           </div>
-        )}
+        ) : null}
       </div>
 
       {/* Bottom controls */}
       {numPages > 0 && (
         <div className="flex-shrink-0 bg-dark-800 border-t border-white/10 px-4 py-3 flex items-center justify-between">
-          {/* Zoom */}
           <div className="flex items-center gap-1">
             <button
               onClick={() => setScale(s => Math.max(0.5, +(s - 0.25).toFixed(2)))}
@@ -141,7 +185,6 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
             </button>
           </div>
 
-          {/* Page navigation */}
           <div className="flex items-center gap-2">
             <button
               onClick={prevPage}
@@ -162,7 +205,6 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
             </button>
           </div>
 
-          {/* Spacer to balance layout */}
           <div className="w-24" />
         </div>
       )}
