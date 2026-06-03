@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import * as db from '@/lib/tg-db';
-import { uploadThumbnailAsPhoto, formatFileSize } from '@/lib/tg-storage';
+import { formatFileSize } from '@/lib/tg-storage';
+
+export const runtime = 'nodejs';
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const STORAGE_CHANNEL_ID = process.env.TELEGRAM_STORAGE_CHANNEL_ID;
@@ -14,8 +16,12 @@ async function sendMessage(chatId: string | number, text: string, parseMode = 'H
   });
 }
 
-// Create a book record from a Telegram document object
-async function ingestDocument(doc: any): Promise<{ created: boolean; title: string }> {
+// Create a book record from a Telegram document object.
+// messageId should be the storage-channel message_id when available (enables MTProto for large files).
+async function ingestDocument(
+  doc: any,
+  messageId?: number,
+): Promise<{ created: boolean; title: string }> {
   const isPdf = doc.mime_type === 'application/pdf';
   const isEpub = doc.mime_type === 'application/epub+zip';
   if (!isPdf && !isEpub) return { created: false, title: '' };
@@ -27,12 +33,10 @@ async function ingestDocument(doc: any): Promise<{ created: boolean; title: stri
   const rawName = doc.file_name || 'Unknown Book';
   const title = rawName.replace(/\.(pdf|epub)$/i, '').replace(/[-_]+/g, ' ').trim();
 
-  let coverFileId = '';
+  // Use Telegram's auto-generated thumbnail file_id directly as the cover.
+  // No re-upload needed — the cover proxy (/api/books/[id]/cover) fetches it on demand.
   const thumb = doc.thumbnail || doc.thumb;
-  if (thumb?.file_id) {
-    const coverResult = await uploadThumbnailAsPhoto(thumb.file_id, title);
-    if (coverResult) coverFileId = coverResult.file_id;
-  }
+  const coverFileId = thumb?.file_id || '';
 
   await db.insert<db.Book>('books', {
     title,
@@ -51,6 +55,7 @@ async function ingestDocument(doc: any): Promise<{ created: boolean; title: stri
     download_count: 0,
     view_count: 0,
     telegram_file_id: doc.file_id,
+    telegram_message_id: messageId,
     preview_pages: [],
     updated_at: new Date().toISOString(),
   } as any);
@@ -63,7 +68,8 @@ async function handleChannelPost(post: any) {
   if (!post.document) return;
   const chatId = String(post.chat?.id);
   if (chatId !== String(STORAGE_CHANNEL_ID)) return;
-  await ingestDocument(post.document);
+  // Pass the channel message_id so MTProto can stream files > 20 MB
+  await ingestDocument(post.document, post.message_id);
 }
 
 // Handle any user forwarding a PDF/EPUB to the bot — ingest it as a book

@@ -225,7 +225,11 @@ async function write(fn: (db: TGDatabase) => void | TGDatabase): Promise<void> {
   _writeQueue = _writeQueue
     .catch(() => {}) // previous failure must not block future writes
     .then(async () => {
-      const db = await loadDb();
+      const snapshot = await loadDb();
+      // Deep-clone so fn() never mutates _cache before a successful save.
+      // Without this, a failed saveDb leaves the cache ahead of Telegram,
+      // causing books to appear on the site but not be found on read.
+      const db: TGDatabase = JSON.parse(JSON.stringify(snapshot));
       const result = fn(db);
       await saveDb(result !== undefined ? result : db);
     });
