@@ -85,10 +85,13 @@ export async function GET(
     }
 
     // ── MTProto fallback for files > 20 MB ────────────────────────────────────
-    // Works on any persistent server (Render, VPS, etc.). On Vercel serverless
-    // this may time out for very large files.
+    // Works on any persistent server (Render, VPS, etc.).
+    // telegram_source_chat_id tells us WHERE the file lives:
+    //   - channel upload → storage channel ID
+    //   - bot DM upload  → the user's chat ID with the bot
     if (book.telegram_message_id && mtproto.isAvailable()) {
-      const buffer = await mtproto.downloadByMessageId(book.telegram_message_id);
+      const sourceChatId = book.telegram_source_chat_id || process.env.TELEGRAM_STORAGE_CHANNEL_ID!;
+      const buffer = await mtproto.downloadFromChat(sourceChatId, book.telegram_message_id);
       return new NextResponse(buffer as unknown as BodyInit, {
         status: 200,
         headers: pdfHeaders(buffer.length),
@@ -98,8 +101,9 @@ export async function GET(
     return NextResponse.json(
       {
         success: false,
-        error:
-          'This file is larger than 20 MB and requires MTProto credentials (TELEGRAM_API_ID / TELEGRAM_API_HASH) to stream. Set them in your environment variables.',
+        error: mtproto.isAvailable()
+          ? 'File source location not stored — please re-send the file to the bot.'
+          : 'This file is larger than 20 MB and requires MTProto credentials (TELEGRAM_API_ID / TELEGRAM_API_HASH) to stream.',
       },
       { status: 413 }
     );

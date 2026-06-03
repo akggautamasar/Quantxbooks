@@ -41,6 +41,7 @@ export interface Book {
   view_count: number;
   telegram_file_id?: string;
   telegram_message_id?: number;
+  telegram_source_chat_id?: string; // chat where the file actually lives (DM or storage channel)
   created_at: string;
   updated_at: string;
 }

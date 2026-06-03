@@ -17,11 +17,15 @@ async function sendMessage(chatId: string | number, text: string, parseMode = 'H
   });
 }
 
-// Ingest a Telegram document into the books collection.
-// messageId is the storage-channel message ID (needed for MTProto streaming of >20 MB files).
+interface FileSource {
+  /** The chat/channel where this file message lives (used by MTProto to locate it). */
+  chatId: string | number;
+  messageId: number;
+}
+
 async function ingestDocument(
   doc: any,
-  messageId?: number,
+  source?: FileSource,
 ): Promise<{ created: boolean; title: string }> {
   const isPdf = doc.mime_type === 'application/pdf';
   const isEpub = doc.mime_type === 'application/epub+zip';
@@ -53,7 +57,9 @@ async function ingestDocument(
     download_count: 0,
     view_count: 0,
     telegram_file_id: doc.file_id,
-    telegram_message_id: messageId,
+    // Store exactly WHERE this file lives so MTProto can find it for large files
+    telegram_message_id: source?.messageId,
+    telegram_source_chat_id: source?.chatId != null ? String(source.chatId) : undefined,
     preview_pages: [],
     updated_at: new Date().toISOString(),
   } as any);
@@ -65,8 +71,8 @@ async function handleChannelPost(post: any) {
   if (!post.document) return;
   const chatId = String(post.chat?.id);
   if (chatId !== String(STORAGE_CHANNEL_ID)) return;
-  // Pass message_id so the read route can use MTProto for files > 20 MB
-  await ingestDocument(post.document, post.message_id);
+  // Source = storage channel; MTProto will look here for large files
+  await ingestDocument(post.document, { chatId, messageId: post.message_id });
 }
 
 async function handleDocumentMessage(message: any) {
@@ -85,7 +91,11 @@ async function handleDocumentMessage(message: any) {
   }
 
   await sendMessage(chatId, `⏳ Adding to library...`);
-  const { created, title } = await ingestDocument(doc);
+  // Source = this DM chat; MTProto will look here for large files
+  const { created, title } = await ingestDocument(doc, {
+    chatId: message.chat.id,
+    messageId: message.message_id,
+  });
   if (created) {
     await sendMessage(chatId, `✅ Added: <b>${title}</b>\n\nEdit title/author/category at /admin/books`);
   } else {
