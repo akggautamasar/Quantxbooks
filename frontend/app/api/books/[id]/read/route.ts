@@ -77,6 +77,13 @@ export async function GET(
     return new NextResponse(tgResponse.body, { status: 200, headers });
   } catch (err: any) {
     console.error('Read error:', err);
+    const msg: string = err?.message || '';
+    if (msg.includes('file is too big') || msg.includes('too big')) {
+      return NextResponse.json(
+        { success: false, error: 'This PDF exceeds Telegram\'s 20 MB streaming limit. The admin needs to re-upload it via a larger storage provider.' },
+        { status: 413 }
+      );
+    }
     return NextResponse.json({ success: false, error: 'Failed to stream book' }, { status: 500 });
   }
 }
