@@ -21,11 +21,8 @@ export default function PDFReader({ bookId, title, author, onClose }: PDFReaderP
   const [docError, setDocError] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [pageWidth, setPageWidth] = useState(400);
-  const [token, setToken] = useState<string | null>(null);
-
-  useEffect(() => {
-    setToken(localStorage.getItem('token'));
-  }, []);
+  // Read token synchronously so the first fetch includes auth (ssr:false guarantees window exists)
+  const [token] = useState<string | null>(() => localStorage.getItem('token'));
 
   // Touch swipe tracking
   const touchStartX = useRef(0);
